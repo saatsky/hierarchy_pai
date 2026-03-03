@@ -1,0 +1,24 @@
+# Build artifacts
+/_build/
+/deps/
+
+# Local dev config (never include secrets)
+/config/dev.secret.exs
+/.env
+
+# Assets that get compiled during Docker build
+/assets/node_modules/
+
+# Test artifacts
+/cover/
+/doc/
+
+# Editor / OS files
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore

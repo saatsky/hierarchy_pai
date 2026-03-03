@@ -1,0 +1,215 @@
+defmodule HierarchyPai.LLMProvider do
+  @moduledoc """
+  Builds LangChain chat models from a provider configuration map.
+
+  Supported providers:
+  - `:jan_ai`   — local Jan.ai OpenAI-compatible API at http://127.0.0.1:1337
+  - `:openai`   — OpenAI cloud API
+  - `:anthropic` — Anthropic cloud API
+  - `:ollama`   — local Ollama OpenAI-compatible API at http://127.0.0.1:11434
+  - `:custom`   — any OpenAI-compatible endpoint (uses `endpoint` key)
+
+  Provider config shape:
+      %{
+        provider: :jan_ai | :openai | :anthropic | :ollama | :custom,
+        model: "model-name",
+        api_key: "sk-...",          # required for cloud providers
+        endpoint: "http://...",     # required for :custom, optional override
+        stream: true | false        # defaults to false
+      }
+  """
+
+  alias LangChain.ChatModels.ChatOpenAI
+  alias LangChain.ChatModels.ChatAnthropic
+
+  @jan_ai_base "http://127.0.0.1:1337"
+  @ollama_base "http://127.0.0.1:11434"
+
+  @doc """
+  Returns `true` when running inside WSL2.
+  """
+  def wsl2? do
+    case File.read("/proc/sys/kernel/osrelease") do
+      {:ok, content} -> String.downcase(content) =~ "microsoft"
+      _ -> false
+    end
+  end
+
+  @doc """
+  In WSL2, returns the Windows host gateway IP (e.g. "172.20.80.1").
+  Returns `nil` outside WSL2 or if detection fails.
+  """
+  def windows_host_ip do
+    with true <- wsl2?(),
+         {output, 0} <- System.cmd("ip", ["route", "show", "default"]),
+         [_default, _via, ip | _] <- String.split(output) do
+      String.trim(ip)
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Returns the recommended default base URL for a local provider,
+  accounting for WSL2 (where the Windows host IP must be used).
+  """
+  def default_local_base(:jan_ai) do
+    if wsl2?(), do: "http://#{windows_host_ip()}:1337", else: @jan_ai_base
+  end
+
+  def default_local_base(:ollama) do
+    if wsl2?(), do: "http://#{windows_host_ip()}:11434", else: @ollama_base
+  end
+
+  def default_local_base(_), do: nil
+
+  @spec build(map()) :: struct()
+  def build(%{provider: :jan_ai} = config) do
+    base = Map.get(config, :local_base) || default_local_base(:jan_ai)
+    host_header = if needs_host_spoof?(base), do: [{"host", "localhost"}], else: []
+
+    ChatAnthropic.new!(%{
+      model: config.model,
+      endpoint: "#{base}/v1/messages",
+      api_key: "not-required",
+      receive_timeout: 300_000,
+      stream: Map.get(config, :stream, false),
+      req_opts: [retry: false, headers: host_header]
+    })
+  end
+
+  def build(%{provider: :openai} = config) do
+    ChatOpenAI.new!(%{
+      model: config.model,
+      api_key: config.api_key,
+      stream: Map.get(config, :stream, false)
+    })
+  end
+
+  def build(%{provider: :anthropic} = config) do
+    ChatAnthropic.new!(%{
+      model: config.model,
+      api_key: config.api_key,
+      stream: Map.get(config, :stream, false)
+    })
+  end
+
+  def build(%{provider: :ollama} = config) do
+    base = Map.get(config, :local_base) || default_local_base(:ollama)
+    host_header = if needs_host_spoof?(base), do: [{"host", "localhost"}], else: []
+
+    ChatOpenAI.new!(%{
+      model: config.model,
+      endpoint: "#{base}/v1/chat/completions",
+      api_key: "not-required",
+      receive_timeout: 300_000,
+      stream: Map.get(config, :stream, false),
+      req_config: %{retry: false, headers: host_header}
+    })
+  end
+
+  def build(%{provider: :custom} = config) do
+    ChatOpenAI.new!(%{
+      model: config.model,
+      endpoint: config.endpoint,
+      api_key: Map.get(config, :api_key, "not-required"),
+      stream: Map.get(config, :stream, false)
+    })
+  end
+
+  @doc """
+  Returns `true` if the provider discovers models from a local server.
+  """
+  def local_provider?(:jan_ai), do: true
+  def local_provider?(:ollama), do: true
+  def local_provider?(_), do: false
+
+  @doc """
+  Checks if the local server is reachable and fetches its model list.
+  Returns `{:ok, [model_id]}` or `{:error, reason_string}`.
+  """
+  @spec fetch_local_models(atom(), String.t() | nil) ::
+          {:ok, [String.t()], String.t()} | {:error, atom() | String.t()}
+  def fetch_local_models(provider, custom_base_url \\ nil)
+
+  def fetch_local_models(:jan_ai, override) do
+    candidates =
+      if override do
+        [override]
+      else
+        base_candidates = ["http://127.0.0.1:1337", "http://localhost:1337"]
+        wsl_candidates = if wsl2?(), do: ["http://#{windows_host_ip()}:1337"], else: []
+        wsl_candidates ++ base_candidates
+      end
+
+    try_candidates(candidates)
+  end
+
+  def fetch_local_models(:ollama, override) do
+    candidates =
+      if override do
+        [override]
+      else
+        base_candidates = ["http://127.0.0.1:11434", "http://localhost:11434"]
+        wsl_candidates = if wsl2?(), do: ["http://#{windows_host_ip()}:11434"], else: []
+        wsl_candidates ++ base_candidates
+      end
+
+    try_candidates(candidates)
+  end
+
+  def fetch_local_models(_, _), do: {:error, "Not a local provider"}
+
+  defp try_candidates([base | rest]) do
+    case do_fetch_models("#{base}/v1/models", needs_host_spoof?(base)) do
+      {:error, :server_offline} when rest != [] -> try_candidates(rest)
+      {:ok, models} -> {:ok, models, base}
+      result -> result
+    end
+  end
+
+  defp try_candidates([]), do: {:error, :server_offline}
+
+  # Jan.ai validates the Host header and rejects non-localhost values.
+  # When connecting via a non-loopback IP (e.g. WSL2 gateway), spoof Host: localhost.
+  defp needs_host_spoof?(base) do
+    case URI.parse(base) do
+      %{host: h} when h in ["localhost", "127.0.0.1", "::1"] -> false
+      _ -> true
+    end
+  end
+
+  defp do_fetch_models(url, spoof_host) do
+    extra = if spoof_host, do: [headers: [{"host", "localhost"}]], else: []
+
+    case Req.get(url, [receive_timeout: 4_000, retry: false] ++ extra) do
+      {:ok, %{status: 200, body: %{"data" => data}}} when is_list(data) ->
+        ids = data |> Enum.map(& &1["id"]) |> Enum.reject(&is_nil/1) |> Enum.sort()
+        {:ok, ids}
+
+      {:ok, %{status: status}} ->
+        {:error, "Server returned HTTP #{status}"}
+
+      {:error, %Req.TransportError{reason: reason}}
+      when reason in [:econnrefused, :nxdomain, :timeout] ->
+        {:error, :server_offline}
+
+      {:error, %Req.TransportError{reason: reason}} ->
+        {:error, "Connection error: #{reason}"}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
+
+  @doc "Returns the default models list for cloud providers."
+  def default_models(:openai), do: ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
+  def default_models(:anthropic), do: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
+  def default_models(_), do: []
+
+  @doc "Returns whether the provider needs an API key."
+  def needs_api_key?(:jan_ai), do: false
+  def needs_api_key?(:ollama), do: false
+  def needs_api_key?(:custom), do: false
+  def needs_api_key?(_), do: true
+end

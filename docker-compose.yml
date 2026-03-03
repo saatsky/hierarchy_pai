@@ -1,0 +1,20 @@
+services:
+  app:
+    build: .
+    image: hierarchy_pai:latest
+    ports:
+      - "4000:4000"
+    environment:
+      # Required: generate once with: mix phx.gen.secret
+      # or let docker-compose generate a random one via the shell substitution below.
+      # For production use, set this in a .env file and never commit it.
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:-please_set_a_real_secret_in_dot_env_file_run_mix_phx_gen_secret}
+      PHX_HOST: ${PHX_HOST:-localhost}
+      PORT: "4000"
+      # Set to true to see debug logs
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    # Allows the container to reach services running on the host (e.g. Jan.ai at localhost:1337).
+    # On Linux: uses host-gateway. On Docker Desktop (Mac/Win): host.docker.internal resolves automatically.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
