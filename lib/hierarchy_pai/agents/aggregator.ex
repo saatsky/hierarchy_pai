@@ -19,6 +19,10 @@ defmodule HierarchyPai.Agents.Aggregator do
   - Do not repeat step labels — integrate the content naturally.
   """
 
+  # Max chars per step output — keeps total request within typical model context limits.
+  # ~2000 chars ≈ 500 tokens; 10 steps × 500 = 5000 tokens (safe for 8k-limit models).
+  @max_output_chars_per_step 2000
+
   @spec aggregate(String.t(), list(), map(), String.t()) ::
           {:ok, String.t()} | {:error, String.t()}
   def aggregate(goal, step_results, provider_config, pubsub_topic) do
@@ -42,7 +46,16 @@ defmodule HierarchyPai.Agents.Aggregator do
 
     results_text =
       Enum.map_join(step_results, "\n\n", fn r ->
-        "### Step #{r["step_id"]}: #{r["title"]}\n#{r["output"]}"
+        output = r["output"] || ""
+
+        truncated =
+          if String.length(output) > @max_output_chars_per_step do
+            String.slice(output, 0, @max_output_chars_per_step) <> "\n…[truncated]"
+          else
+            output
+          end
+
+        "### Step #{r["step_id"]}: #{r["title"]}\n#{truncated}"
       end)
 
     user_message = """

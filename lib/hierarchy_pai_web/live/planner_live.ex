@@ -3,12 +3,14 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
   alias HierarchyPai.LLMProvider
   alias HierarchyPai.Agents.AgentRegistry
+  alias HierarchyPai.ProviderStore
 
   @providers [
     {"Jan.ai (local)", :jan_ai},
     {"OpenAI", :openai},
     {"Anthropic", :anthropic},
     {"Ollama (local)", :ollama},
+    {"GitHub Models", :github_copilot},
     {"Custom endpoint", :custom}
   ]
 
@@ -57,7 +59,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:error, nil)
      |> assign(:planner_stream, "")
      |> assign(:elapsed_seconds, 0)
-     |> assign(:task_pid, nil)}
+     |> assign(:task_pid, nil)
+     |> assign(:saved_providers, ProviderStore.list())
+     |> assign(:provider_form, nil)
+     |> assign(:planner_provider_id, pick_default_provider_id(ProviderStore.list()))
+     |> assign(:redo_confirm, nil)}
   end
 
   @impl true
@@ -74,19 +80,30 @@ defmodule HierarchyPaiWeb.PlannerLive do
       |> assign(:local_models, [])
 
     socket =
-      if LLMProvider.local_provider?(provider) do
-        send(self(), :fetch_local_models)
+      cond do
+        LLMProvider.local_provider?(provider) ->
+          send(self(), :fetch_local_models)
 
-        socket
-        |> assign(:local_server_status, :checking)
-        |> assign(:max_retries, 1)
-      else
-        default = hd(LLMProvider.default_models(provider) ++ [""])
+          socket
+          |> assign(:local_server_status, :checking)
+          |> assign(:max_retries, 1)
 
-        socket
-        |> assign(:local_server_status, :unknown)
-        |> assign(:model, default)
-        |> assign(:max_retries, 2)
+        provider == :github_copilot ->
+          default = hd(LLMProvider.default_models(provider) ++ [""])
+
+          socket
+          |> assign(:local_server_status, :unknown)
+          |> assign(:model, default)
+          |> assign(:custom_endpoint, LLMProvider.github_copilot_endpoint())
+          |> assign(:max_retries, 2)
+
+        true ->
+          default = hd(LLMProvider.default_models(provider) ++ [""])
+
+          socket
+          |> assign(:local_server_status, :unknown)
+          |> assign(:model, default)
+          |> assign(:max_retries, 2)
       end
 
     {:noreply, socket}
@@ -117,6 +134,132 @@ defmodule HierarchyPaiWeb.PlannerLive do
   @impl true
   def handle_event("update_endpoint", %{"value" => ep}, socket) do
     {:noreply, assign(socket, :custom_endpoint, ep)}
+  end
+
+  # ── Saved Providers (ETS) ──────────────────────────────────────────────────
+
+  @impl true
+  def handle_event("open_provider_form", _params, socket) do
+    blank = %{
+      id: nil,
+      name: "",
+      provider: :openai,
+      model: "",
+      api_key: "",
+      endpoint: ""
+    }
+
+    {:noreply, assign(socket, :provider_form, blank)}
+  end
+
+  @impl true
+  def handle_event("edit_saved_provider", %{"id" => id}, socket) do
+    entry = ProviderStore.get(id)
+    {:noreply, assign(socket, :provider_form, entry)}
+  end
+
+  @impl true
+  def handle_event("cancel_provider_form", _params, socket) do
+    {:noreply, assign(socket, :provider_form, nil)}
+  end
+
+  @impl true
+  def handle_event("provider_form_change", %{"saved_provider" => params}, socket) do
+    current = socket.assigns.provider_form
+
+    updated =
+      current
+      |> Map.put(:name, Map.get(params, "name", current.name))
+      |> Map.put(
+        :provider,
+        String.to_existing_atom(Map.get(params, "provider", to_string(current.provider)))
+      )
+      |> Map.put(:model, Map.get(params, "model", current.model))
+      |> Map.put(:api_key, Map.get(params, "api_key", current.api_key))
+      |> Map.put(:endpoint, Map.get(params, "endpoint", current.endpoint))
+
+    {:noreply, assign(socket, :provider_form, updated)}
+  end
+
+  @impl true
+  def handle_event("save_provider_form", %{"saved_provider" => params}, socket) do
+    current = socket.assigns.provider_form
+    provider = String.to_existing_atom(Map.get(params, "provider", "openai"))
+
+    endpoint =
+      if provider == :github_copilot,
+        do: LLMProvider.github_copilot_endpoint(),
+        else: String.trim(Map.get(params, "endpoint", ""))
+
+    entry = %{
+      id: current[:id],
+      name: String.trim(Map.get(params, "name", "")),
+      provider: provider,
+      model: String.trim(Map.get(params, "model", "")),
+      api_key: String.trim(Map.get(params, "api_key", "")),
+      endpoint: endpoint
+    }
+
+    {:ok, _} = ProviderStore.save(entry)
+
+    saved = ProviderStore.list()
+    # Auto-select this provider for the planner if none is selected yet
+    planner_provider_id =
+      socket.assigns.planner_provider_id || pick_default_provider_id(saved)
+
+    {:noreply,
+     socket
+     |> assign(:saved_providers, saved)
+     |> assign(:provider_form, nil)
+     |> assign(:planner_provider_id, planner_provider_id)}
+  end
+
+  @impl true
+  def handle_event("delete_saved_provider", %{"id" => id}, socket) do
+    :ok = ProviderStore.delete(id)
+    saved = ProviderStore.list()
+
+    # If deleted provider was the selected planner provider, pick a new default
+    planner_provider_id =
+      if socket.assigns.planner_provider_id == id,
+        do: pick_default_provider_id(saved),
+        else: socket.assigns.planner_provider_id
+
+    {:noreply,
+     socket
+     |> assign(:saved_providers, saved)
+     |> assign(:planner_provider_id, planner_provider_id)}
+  end
+
+  @impl true
+  def handle_event("update_planner_provider", %{"provider_id" => id}, socket) do
+    {:noreply, assign(socket, :planner_provider_id, id)}
+  end
+
+  @impl true
+  def handle_event("save_global_as_provider", _params, socket) do
+    a = socket.assigns
+
+    name =
+      case a.provider do
+        :jan_ai -> "Jan.ai"
+        :openai -> "OpenAI"
+        :anthropic -> "Anthropic"
+        :ollama -> "Ollama"
+        :github_copilot -> "GitHub Models"
+        :custom -> "Custom"
+      end
+
+    entry = %{
+      id: nil,
+      name: name,
+      provider: a.provider,
+      model: a.model,
+      api_key: a.api_key,
+      endpoint: a.custom_endpoint
+    }
+
+    {:noreply, assign(socket, :provider_form, entry)}
   end
 
   @impl true
@@ -193,6 +336,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
     step_agent_types = socket.assigns.step_agent_types
     step_configs = socket.assigns.step_configs
     default_config = build_provider_config(socket.assigns)
+    resolved_step_configs = resolve_step_configs(step_configs, default_config)
     topic = socket.assigns.pubsub_topic
 
     # Merge user-selected agent types into each step before execution
@@ -216,7 +360,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
           HierarchyPai.Orchestrator.execute(
             plan_with_agents,
             accepted_step_ids,
-            step_configs,
+            resolved_step_configs,
             default_config,
             topic
           )
@@ -278,6 +422,17 @@ defmodule HierarchyPaiWeb.PlannerLive do
   @impl true
   def handle_event(
         "update_step_config",
+        %{"step_id" => id_str, "provider_id" => provider_id, "model" => m},
+        socket
+      ) do
+    id = String.to_integer(id_str)
+    cfg = %{provider_id: provider_id, model: m}
+    {:noreply, update(socket, :step_configs, &Map.put(&1, id, cfg))}
+  end
+
+  @impl true
+  def handle_event(
+        "update_step_config",
         %{"step_id" => id_str, "provider" => p, "model" => m},
         socket
       ) do
@@ -334,6 +489,65 @@ defmodule HierarchyPaiWeb.PlannerLive do
   end
 
   @impl true
+  def handle_event("download_answer", _params, socket) do
+    answer = socket.assigns.final_answer || ""
+    task = String.trim(socket.assigns.task)
+    title = if task != "", do: "# #{task}\n\n", else: ""
+    content = title <> answer
+
+    {:noreply,
+     push_event(socket, "download_file", %{
+       filename: "final_answer.md",
+       content: content,
+       mime: "text/markdown"
+     })}
+  end
+
+  @impl true
+  def handle_event("download_full_report", _params, socket) do
+    task = String.trim(socket.assigns.task)
+    plan = socket.assigns.plan || %{}
+    goal = plan["goal"] || task
+    step_results = socket.assigns.step_results
+    final_answer = socket.assigns.final_answer || ""
+
+    steps_section =
+      if step_results != [] do
+        steps_md =
+          Enum.map_join(step_results, "\n\n---\n\n", fn r ->
+            "## Step #{r["step_id"]}: #{r["title"]}\n\n#{r["output"] || "_No output captured._"}"
+          end)
+
+        "# Step Outputs\n\n#{steps_md}"
+      else
+        ""
+      end
+
+    final_section =
+      if final_answer != "" do
+        "# Final Answer\n\n#{final_answer}"
+      else
+        ""
+      end
+
+    content =
+      [
+        "# #{goal}",
+        steps_section,
+        final_section
+      ]
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n\n---\n\n")
+
+    {:noreply,
+     push_event(socket, "download_file", %{
+       filename: "full_report.md",
+       content: content,
+       mime: "text/markdown"
+     })}
+  end
+
+  @impl true
   def handle_event("cancel", _params, socket) do
     if socket.assigns.task_pid do
       Process.exit(socket.assigns.task_pid, :shutdown)
@@ -355,6 +569,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:step_outputs, %{})
      |> assign(:step_agent_types, %{})
      |> assign(:selected_step_id, nil)
+     |> assign(:redo_confirm, nil)
      |> assign(:error, nil)}
   end
 
@@ -372,6 +587,84 @@ defmodule HierarchyPaiWeb.PlannerLive do
   @impl true
   def handle_event("close_step_output", _params, socket) do
     {:noreply, assign(socket, :selected_step_id, nil)}
+  end
+
+  @impl true
+  def handle_event("request_redo_step", %{"step_id" => step_id_str}, socket) do
+    step_id = String.to_integer(step_id_str)
+    steps = (socket.assigns.plan || %{})["steps"] || []
+    accepted = socket.assigns.accepted_steps
+    also_ids = transitive_dependents(step_id, steps, accepted)
+
+    {:noreply,
+     socket
+     |> assign(:redo_confirm, %{step_id: step_id, also_ids: also_ids})
+     |> assign(:selected_step_id, nil)}
+  end
+
+  @impl true
+  def handle_event("cancel_redo_confirm", _params, socket) do
+    {:noreply, assign(socket, :redo_confirm, nil)}
+  end
+
+  @impl true
+  def handle_event("confirm_redo_step", _params, socket) do
+    %{step_id: step_id, also_ids: also_ids} = socket.assigns.redo_confirm
+    all_redo_ids = MapSet.new([step_id | also_ids])
+
+    plan = socket.assigns.plan
+    step_configs = socket.assigns.step_configs
+    default_config = build_provider_config(socket.assigns)
+    resolved = resolve_step_configs(step_configs, default_config)
+    topic = socket.assigns.pubsub_topic
+
+    # Remove old results for steps being re-run so they don't duplicate
+    prior_results =
+      socket.assigns.step_results
+      |> Enum.reject(fn r -> MapSet.member?(all_redo_ids, r["step_id"]) end)
+
+    new_statuses =
+      Enum.reduce(all_redo_ids, socket.assigns.step_statuses, fn id, acc ->
+        Map.put(acc, id, :pending)
+      end)
+
+    new_outputs = Map.drop(socket.assigns.step_outputs, MapSet.to_list(all_redo_ids))
+
+    {:ok, pid} =
+      Task.start(fn ->
+        try do
+          HierarchyPai.Orchestrator.execute_steps(
+            plan,
+            all_redo_ids,
+            resolved,
+            default_config,
+            topic,
+            prior_results
+          )
+        rescue
+          e ->
+            Phoenix.PubSub.broadcast(
+              HierarchyPai.PubSub,
+              topic,
+              {:orchestrator, {:error, Exception.message(e)}}
+            )
+        end
+      end)
+
+    send(self(), :tick)
+
+    {:noreply,
+     socket
+     |> assign(:redo_confirm, nil)
+     |> assign(:status, :executing)
+     |> assign(:step_statuses, new_statuses)
+     |> assign(:step_outputs, new_outputs)
+     |> assign(:step_results, prior_results)
+     |> assign(:step_errors, %{})
+     |> assign(:elapsed_seconds, 0)
+     |> assign(:final_answer, socket.assigns.final_answer)
+     |> assign(:selected_step_id, nil)
+     |> assign(:task_pid, pid)}
   end
 
   @impl true
@@ -403,20 +696,25 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
   @impl true
   def handle_event("retry_failed_steps", _params, socket) do
-    failed_ids =
+    # Retry all non-completed steps: both explicitly failed (:error) and those
+    # that never ran because their wave was aborted (:pending).
+    incomplete_ids =
       socket.assigns.step_statuses
-      |> Enum.filter(fn {_id, s} -> s == :error end)
+      |> Enum.filter(fn {_id, s} -> s in [:error, :pending] end)
       |> Enum.map(fn {id, _} -> id end)
       |> MapSet.new()
 
     plan = socket.assigns.plan
     step_configs = socket.assigns.step_configs
     default_config = build_provider_config(socket.assigns)
+    resolved_step_configs = resolve_step_configs(step_configs, default_config)
     topic = socket.assigns.pubsub_topic
+    # Pass already-completed results as context so retried steps can reference them.
+    prior_results = socket.assigns.step_results
 
-    # Reset failed steps to :pending
+    # Reset incomplete steps to :pending
     new_statuses =
-      Enum.reduce(failed_ids, socket.assigns.step_statuses, fn id, acc ->
+      Enum.reduce(incomplete_ids, socket.assigns.step_statuses, fn id, acc ->
         Map.put(acc, id, :pending)
       end)
 
@@ -425,10 +723,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
         try do
           HierarchyPai.Orchestrator.execute_steps(
             plan,
-            failed_ids,
-            step_configs,
+            incomplete_ids,
+            resolved_step_configs,
             default_config,
-            topic
+            topic,
+            prior_results
           )
         rescue
           e ->
@@ -447,7 +746,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:status, :executing)
      |> assign(:step_statuses, new_statuses)
      |> assign(:step_errors, %{})
-     |> assign(:step_outputs, %{})
+     |> assign(
+       :step_outputs,
+       Map.drop(socket.assigns.step_outputs, MapSet.to_list(incomplete_ids))
+     )
      |> assign(:selected_step_id, nil)
      |> assign(:task_pid, pid)}
   end
@@ -592,10 +894,41 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> update(:step_errors, &Map.put(&1, step_id, reason))}
   end
 
-  # Partial results from a retry run — merge into existing step_results
-  def handle_info({:orchestrator, {:partial_results_ready, results}}, socket) do
-    merged = (socket.assigns.step_results || []) ++ results
-    {:noreply, assign(socket, :step_results, merged)}
+  # Partial results from a retry run — merge into existing step_results,
+  # then check if all accepted steps are now done and auto-proceed to aggregation.
+  def handle_info({:orchestrator, {:partial_results_ready, new_results}}, socket) do
+    merged = (socket.assigns.step_results || []) ++ new_results
+
+    all_done? =
+      socket.assigns.step_statuses
+      |> Map.values()
+      |> Enum.all?(&(&1 == :done))
+
+    socket = assign(socket, :step_results, merged)
+
+    if all_done? do
+      goal = get_in(socket.assigns.plan, ["goal"]) || ""
+      provider_config = build_provider_config(socket.assigns)
+      topic = socket.assigns.pubsub_topic
+
+      {:ok, _pid} =
+        Task.start(fn ->
+          try do
+            HierarchyPai.Orchestrator.reaggregate(goal, merged, provider_config, topic)
+          rescue
+            e ->
+              Phoenix.PubSub.broadcast(
+                HierarchyPai.PubSub,
+                topic,
+                {:orchestrator, {:error, Exception.message(e)}}
+              )
+          end
+        end)
+
+      {:noreply, assign(socket, :status, :aggregating)}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Wave failed — step_error events already set :step_failed; ignore if already there
@@ -666,23 +999,87 @@ defmodule HierarchyPaiWeb.PlannerLive do
   # ── Helpers ────────────────────────────────────────────────────────────────
 
   defp build_provider_config(assigns) do
-    base = %{
-      provider: assigns.provider,
-      model: String.trim(assigns.model),
-      api_key: String.trim(assigns.api_key),
-      max_retries: assigns.max_retries
-    }
+    entry = assigns.planner_provider_id && ProviderStore.get(assigns.planner_provider_id)
 
-    cond do
-      assigns.provider == :custom ->
-        Map.put(base, :endpoint, String.trim(assigns.custom_endpoint))
+    case entry do
+      nil ->
+        # No saved provider selected — return an inert config; "run" button is disabled
+        # in this state so this path is only hit defensively.
+        %{provider: :openai, model: "", api_key: "", max_retries: assigns.max_retries}
 
-      LLMProvider.local_provider?(assigns.provider) and assigns.local_host != "" ->
-        Map.put(base, :local_base, assigns.local_host)
+      entry ->
+        base = %{
+          provider: entry.provider,
+          model: entry.model,
+          api_key: entry.api_key,
+          max_retries: assigns.max_retries
+        }
 
-      true ->
-        base
+        cond do
+          entry.provider in [:custom, :github_copilot] and entry.endpoint != "" ->
+            Map.put(base, :endpoint, entry.endpoint)
+
+          LLMProvider.local_provider?(entry.provider) and entry.endpoint != "" ->
+            Map.put(base, :local_base, entry.endpoint)
+
+          true ->
+            base
+        end
     end
+  end
+
+  # Resolve step_configs that reference ETS entries (provider_id) into full configs.
+  defp resolve_step_configs(step_configs, default_config) do
+    Map.new(step_configs, fn {step_id, cfg} ->
+      resolved =
+        case cfg do
+          %{provider_id: pid, model: model} ->
+            case ProviderStore.get(pid) do
+              nil ->
+                default_config
+
+              entry ->
+                base = %{
+                  provider: entry.provider,
+                  model: model,
+                  api_key: entry.api_key,
+                  max_retries: default_config.max_retries
+                }
+
+                cond do
+                  entry.provider in [:custom, :github_copilot] and entry.endpoint != "" ->
+                    Map.put(base, :endpoint, entry.endpoint)
+
+                  LLMProvider.local_provider?(entry.provider) and entry.endpoint != "" ->
+                    Map.put(base, :local_base, entry.endpoint)
+
+                  true ->
+                    base
+                end
+            end
+
+          full_cfg ->
+            full_cfg
+        end
+
+      {step_id, resolved}
+    end)
+  end
+
+  defp pick_default_provider_id([]), do: nil
+  defp pick_default_provider_id([first | _]), do: first.id
+
+  # Returns all step IDs (accepted) that transitively depend on `step_id`.
+  defp transitive_dependents(step_id, steps, accepted) do
+    direct =
+      steps
+      |> Enum.filter(fn s ->
+        MapSet.member?(accepted, s["id"]) and step_id in (s["depends_on"] || [])
+      end)
+      |> Enum.map(& &1["id"])
+
+    indirect = Enum.flat_map(direct, &transitive_dependents(&1, steps, accepted))
+    (direct ++ indirect) |> Enum.uniq()
   end
 
   defp step_config_for(step_id, step_configs, global_provider, global_model) do
@@ -723,6 +1120,22 @@ defmodule HierarchyPaiWeb.PlannerLive do
   @impl true
   def render(assigns) do
     ~H"""
+    <div id="download-hook" phx-hook=".DownloadFile"></div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".DownloadFile">
+      export default {
+        mounted() {
+          this.handleEvent("download_file", ({ filename, content, mime }) => {
+            const blob = new Blob([content], { type: mime });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+          });
+        }
+      }
+    </script>
     <Layouts.app flash={@flash}>
       <div class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-slate-100">
         <%!-- Header --%>
@@ -785,29 +1198,54 @@ defmodule HierarchyPaiWeb.PlannerLive do
               <button
                 id="run-button"
                 phx-click="run"
-                disabled={
-                  String.trim(@task) == "" or
-                    String.trim(@model) == "" or
-                    (@local_server_status in [:checking, :offline] and
-                       LLMProvider.local_provider?(@provider))
-                }
+                disabled={String.trim(@task) == "" or is_nil(@planner_provider_id)}
                 class="w-full py-2.5 px-4 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-lg shadow-violet-900/30 hover:shadow-violet-800/40"
               >
                 <.icon name="hero-play" class="w-4 h-4" /> Run Planner
               </button>
             <% else %>
               <div class="flex items-center gap-3">
-                <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-slate-700/50 border border-slate-600/50 text-slate-400">
-                  <.icon name="hero-arrow-path" class="w-4 h-4 animate-spin text-violet-400" />
-                  <span>{status_label(@status)}&hellip;</span>
-                </div>
-                <button
-                  id="cancel-button"
-                  phx-click="cancel"
-                  class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-red-900/50 hover:bg-red-800/60 border border-red-700/50 text-red-300 hover:text-red-200"
-                >
-                  <.icon name="hero-stop" class="w-4 h-4" /> Cancel
-                </button>
+                <%= cond do %>
+                  <% @status in [:done, :review_answer] -> %>
+                    <%!-- Pipeline complete — show a redo option instead of spinner/cancel --%>
+                    <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-emerald-600/10 border border-emerald-700/30 text-emerald-400">
+                      <.icon name="hero-check-circle" class="w-4 h-4" />
+                      <span>{if @status == :done, do: "Completed", else: "Review answer"}</span>
+                    </div>
+                    <button
+                      id="redo-button"
+                      phx-click="cancel"
+                      class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-violet-700/50 hover:bg-violet-600/60 border border-violet-600/50 text-violet-300 hover:text-violet-200"
+                    >
+                      <.icon name="hero-arrow-path" class="w-4 h-4" /> Redo task
+                    </button>
+                  <% @status == :step_failed -> %>
+                    <%!-- Action is in the execution board — just show status here --%>
+                    <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-orange-600/10 border border-orange-700/30 text-orange-400">
+                      <.icon name="hero-exclamation-triangle" class="w-4 h-4" />
+                      <span>Action required in board below</span>
+                    </div>
+                    <button
+                      id="cancel-button"
+                      phx-click="cancel"
+                      class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-red-900/50 hover:bg-red-800/60 border border-red-700/50 text-red-300 hover:text-red-200"
+                    >
+                      <.icon name="hero-stop" class="w-4 h-4" /> Cancel
+                    </button>
+                  <% true -> %>
+                    <%!-- Active processing state --%>
+                    <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-slate-700/50 border border-slate-600/50 text-slate-400">
+                      <.icon name="hero-arrow-path" class="w-4 h-4 animate-spin text-violet-400" />
+                      <span>{status_label(@status)}&hellip;</span>
+                    </div>
+                    <button
+                      id="cancel-button"
+                      phx-click="cancel"
+                      class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-red-900/50 hover:bg-red-800/60 border border-red-700/50 text-red-300 hover:text-red-200"
+                    >
+                      <.icon name="hero-stop" class="w-4 h-4" /> Cancel
+                    </button>
+                <% end %>
               </div>
             <% end %>
           </div>
@@ -937,37 +1375,81 @@ defmodule HierarchyPaiWeb.PlannerLive do
                             <form
                               phx-change="update_step_config"
                               id={"step-cfg-#{step["id"]}"}
-                              class="flex items-center gap-2"
+                              class="flex items-center gap-2 flex-wrap"
                             >
                               <input type="hidden" name="step_id" value={step["id"]} />
-                              <select
-                                name="provider"
-                                class="bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                              >
-                                <%= for {label, val} <- @providers do %>
-                                  <option value={val} selected={step_cfg.provider == val}>
-                                    {label}
-                                  </option>
-                                <% end %>
-                              </select>
-                              <%= if LLMProvider.local_provider?(step_cfg.provider) or LLMProvider.default_models(step_cfg.provider) == [] do %>
-                                <input
-                                  type="text"
-                                  name="model"
-                                  value={step_cfg.model}
-                                  phx-debounce="300"
-                                  placeholder="model"
-                                  class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder-slate-600"
-                                />
-                              <% else %>
+                              <%= if @saved_providers != [] do %>
+                                <%!-- Saved providers: two dropdowns (provider name + model) --%>
+                                <% saved_id = Map.get(step_cfg, :provider_id) %>
+                                <% active_sp =
+                                  Enum.find(@saved_providers, &(&1.id == saved_id)) ||
+                                    hd(@saved_providers) %>
                                 <select
-                                  name="model"
-                                  class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                  name="provider_id"
+                                  class="bg-slate-900 border border-violet-700/50 rounded text-xs text-violet-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
                                 >
-                                  <%= for m <- LLMProvider.default_models(step_cfg.provider) do %>
-                                    <option value={m} selected={step_cfg.model == m}>{m}</option>
+                                  <%= for sp <- @saved_providers do %>
+                                    <option value={sp.id} selected={sp.id == saved_id}>
+                                      {sp.name}
+                                    </option>
                                   <% end %>
                                 </select>
+                                <% sp_models = LLMProvider.default_models(active_sp.provider) %>
+                                <%= if sp_models != [] do %>
+                                  <select
+                                    name="model"
+                                    class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                  >
+                                    <%= for m <- sp_models do %>
+                                      <option
+                                        value={m}
+                                        selected={Map.get(step_cfg, :model, active_sp.model) == m}
+                                      >
+                                        {m}
+                                      </option>
+                                    <% end %>
+                                  </select>
+                                <% else %>
+                                  <input
+                                    type="text"
+                                    name="model"
+                                    value={Map.get(step_cfg, :model, active_sp.model)}
+                                    phx-debounce="300"
+                                    placeholder="model"
+                                    class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder-slate-600"
+                                  />
+                                <% end %>
+                              <% else %>
+                                <%!-- Fallback: raw provider atom + model --%>
+                                <select
+                                  name="provider"
+                                  class="bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                >
+                                  <%= for {label, val} <- @providers do %>
+                                    <option value={val} selected={step_cfg.provider == val}>
+                                      {label}
+                                    </option>
+                                  <% end %>
+                                </select>
+                                <%= if LLMProvider.local_provider?(step_cfg.provider) or LLMProvider.default_models(step_cfg.provider) == [] do %>
+                                  <input
+                                    type="text"
+                                    name="model"
+                                    value={step_cfg.model}
+                                    phx-debounce="300"
+                                    placeholder="model"
+                                    class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder-slate-600"
+                                  />
+                                <% else %>
+                                  <select
+                                    name="model"
+                                    class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                  >
+                                    <%= for m <- LLMProvider.default_models(step_cfg.provider) do %>
+                                      <option value={m} selected={step_cfg.model == m}>{m}</option>
+                                    <% end %>
+                                  </select>
+                                <% end %>
                               <% end %>
                             </form>
                             <%!-- Agent type selector --%>
@@ -1019,21 +1501,28 @@ defmodule HierarchyPaiWeb.PlannerLive do
           <% end %>
 
           <%!-- Execution Kanban Board --%>
-          <%= if @status in [:executing, :step_failed] and @plan do %>
+          <%= if @status in [:executing, :step_failed, :aggregating, :review_answer, :done] and @plan do %>
             <div class={[
               "border rounded-2xl overflow-hidden backdrop-blur-sm",
-              if(@status == :step_failed,
-                do: "bg-orange-950/20 border-orange-700/40",
-                else: "bg-slate-800/60 border-slate-700/50"
-              )
+              cond do
+                @status == :step_failed -> "bg-orange-950/20 border-orange-700/40"
+                @status in [:done, :review_answer] -> "bg-emerald-950/20 border-emerald-700/30"
+                true -> "bg-slate-800/60 border-slate-700/50"
+              end
             ]}>
               <div class="px-5 py-4 border-b border-slate-700/50 flex items-center gap-2">
                 <.icon name="hero-squares-2x2" class="w-4 h-4 text-violet-400" />
                 <h2 class="font-semibold text-slate-200">Execution Board</h2>
-                <%= if @status == :step_failed do %>
-                  <span class="text-xs px-2 py-0.5 rounded-full bg-orange-600/20 text-orange-400 border border-orange-700/40">
-                    Action required
-                  </span>
+                <%= cond do %>
+                  <% @status == :step_failed -> %>
+                    <span class="text-xs px-2 py-0.5 rounded-full bg-orange-600/20 text-orange-400 border border-orange-700/40">
+                      Action required
+                    </span>
+                  <% @status in [:done, :review_answer] -> %>
+                    <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-600/20 text-emerald-400 border border-emerald-700/40">
+                      Completed — click any done step to redo
+                    </span>
+                  <% true -> %>
                 <% end %>
                 <span class="ml-auto text-xs text-slate-500">{@elapsed_seconds}s</span>
                 <%= if @status == :executing do %>
@@ -1102,26 +1591,58 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   </h3>
                   <div class="space-y-2">
                     <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :done) do %>
-                      <button
-                        phx-click="view_step_output"
-                        phx-value-step_id={step["id"]}
-                        class="w-full text-left bg-emerald-600/10 border border-emerald-700/40 rounded-lg p-3 hover:bg-emerald-600/20 hover:border-emerald-600/60 transition-colors group"
-                      >
+                      <% empty_output? = Map.get(@step_outputs, step["id"], "") == "" %>
+                      <div class={[
+                        "border rounded-lg p-3",
+                        if(empty_output?,
+                          do: "bg-amber-900/10 border-amber-700/40",
+                          else: "bg-emerald-600/10 border-emerald-700/40"
+                        )
+                      ]}>
                         <div class="flex items-center gap-1.5 mb-1">
-                          <.icon name="hero-check-circle" class="w-3 h-3 text-emerald-400" />
-                          <p class="text-xs font-bold text-emerald-400">#{step["id"]}</p>
-                          <.icon
-                            name="hero-eye"
-                            class="w-3 h-3 text-slate-500 group-hover:text-emerald-400 ml-auto transition-colors"
-                          />
+                          <%= if empty_output? do %>
+                            <.icon name="hero-exclamation-triangle" class="w-3 h-3 text-amber-400" />
+                            <p class="text-xs font-bold text-amber-400">#{step["id"]}</p>
+                            <span class="ml-auto text-xs text-amber-500/80 font-medium">empty</span>
+                          <% else %>
+                            <.icon name="hero-check-circle" class="w-3 h-3 text-emerald-400" />
+                            <p class="text-xs font-bold text-emerald-400">#{step["id"]}</p>
+                          <% end %>
                         </div>
                         <p class="text-xs font-medium text-slate-300 leading-snug">
                           {step["title"]}
                         </p>
-                        <p class="text-xs text-emerald-500/70 mt-1 truncate">
+                        <p class={[
+                          "text-xs mt-1 truncate",
+                          if(empty_output?, do: "text-amber-500/60", else: "text-emerald-500/70")
+                        ]}>
                           {AgentRegistry.label_for(step["agent_type"] || "executor")}
                         </p>
-                      </button>
+                        <div class="flex items-center gap-1.5 mt-2">
+                          <button
+                            phx-click="view_step_output"
+                            phx-value-step_id={step["id"]}
+                            class="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md bg-slate-700/60 hover:bg-slate-600/60 text-slate-400 hover:text-slate-200 text-xs transition-colors"
+                          >
+                            <.icon name="hero-eye" class="w-3 h-3" /> View
+                          </button>
+                          <button
+                            phx-click="request_redo_step"
+                            phx-value-step_id={step["id"]}
+                            class={[
+                              "flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
+                              if(empty_output?,
+                                do:
+                                  "bg-amber-700/40 hover:bg-amber-600/50 text-amber-300 hover:text-amber-200",
+                                else:
+                                  "bg-violet-700/40 hover:bg-violet-600/50 text-violet-300 hover:text-violet-200"
+                              )
+                            ]}
+                          >
+                            <.icon name="hero-arrow-path" class="w-3 h-3" /> Redo
+                          </button>
+                        </div>
+                      </div>
                     <% end %>
                   </div>
                 </div>
@@ -1225,15 +1746,108 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 </div>
                 <div class="flex-1 overflow-y-auto p-5">
                   <%= if sel_output == "" do %>
-                    <p class="text-sm text-slate-500 italic">No output captured for this step.</p>
+                    <div class="flex flex-col items-center gap-3 py-4 text-center">
+                      <.icon name="hero-exclamation-triangle" class="w-8 h-8 text-amber-400" />
+                      <p class="text-sm font-medium text-amber-300">This step produced no output</p>
+                      <p class="text-xs text-slate-500 max-w-xs">
+                        The LLM returned an empty response. This step passed nothing to dependent steps.
+                        Redo it to get a proper result.
+                      </p>
+                    </div>
                   <% else %>
                     <pre class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed font-sans">{sel_output}</pre>
                   <% end %>
                 </div>
-                <div class="px-5 py-3 border-t border-slate-700/50 flex justify-end shrink-0">
+                <div class="px-5 py-3 border-t border-slate-700/50 flex items-center justify-between shrink-0">
+                  <button
+                    phx-click="request_redo_step"
+                    phx-value-step_id={@selected_step_id}
+                    class={[
+                      "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                      if(sel_output == "",
+                        do:
+                          "bg-amber-700/50 hover:bg-amber-600/60 text-amber-300 border border-amber-600/40",
+                        else:
+                          "bg-violet-700/40 hover:bg-violet-600/50 text-violet-300 border border-violet-600/40"
+                      )
+                    ]}
+                  >
+                    <.icon name="hero-arrow-path" class="w-3.5 h-3.5" />
+                    {if sel_output == "", do: "Redo (empty output)", else: "Redo this step"}
+                  </button>
                   <span class="text-xs text-slate-500">
-                    This output will be passed to the aggregator.
+                    {if sel_output != "", do: "Output passed to dependent steps & aggregator."}
                   </span>
+                </div>
+              </div>
+            </div>
+          <% end %>
+
+          <%!-- Redo step confirmation modal --%>
+          <%= if @redo_confirm do %>
+            <% redo_step = Enum.find(@plan["steps"] || [], &(&1["id"] == @redo_confirm.step_id)) %>
+            <% also_steps = Enum.filter(@plan["steps"] || [], &(&1["id"] in @redo_confirm.also_ids)) %>
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+              <div class="bg-slate-800 border border-violet-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                <div class="px-6 py-5 border-b border-slate-700/50 flex items-center gap-3">
+                  <div class="w-8 h-8 rounded-lg bg-violet-600/20 flex items-center justify-center">
+                    <.icon name="hero-arrow-path" class="w-4 h-4 text-violet-400" />
+                  </div>
+                  <h3 class="font-semibold text-slate-200">Redo step?</h3>
+                  <button
+                    phx-click="cancel_redo_confirm"
+                    class="ml-auto text-slate-500 hover:text-slate-300 transition-colors"
+                  >
+                    <.icon name="hero-x-mark" class="w-5 h-5" />
+                  </button>
+                </div>
+                <div class="p-6 space-y-4">
+                  <p class="text-sm text-slate-300">
+                    You are about to re-run:
+                  </p>
+                  <div class="bg-violet-900/20 border border-violet-700/40 rounded-lg p-3">
+                    <p class="text-xs font-bold text-violet-400 mb-0.5">
+                      #{redo_step && redo_step["id"]}
+                    </p>
+                    <p class="text-sm font-medium text-slate-200">
+                      {redo_step && redo_step["title"]}
+                    </p>
+                  </div>
+                  <%= if also_steps != [] do %>
+                    <div class="space-y-2">
+                      <p class="text-xs text-amber-400 flex items-center gap-1.5">
+                        <.icon name="hero-exclamation-triangle" class="w-3.5 h-3.5" />
+                        The following dependent steps will also be re-run:
+                      </p>
+                      <div class="space-y-1.5">
+                        <%= for s <- also_steps do %>
+                          <div class="bg-amber-900/15 border border-amber-700/30 rounded-lg px-3 py-2 flex items-center gap-2">
+                            <.icon name="hero-arrow-right" class="w-3 h-3 text-amber-500 shrink-0" />
+                            <p class="text-xs text-slate-300">
+                              <span class="font-bold text-amber-400">#{s["id"]}</span> — {s["title"]}
+                            </p>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+                  <% end %>
+                  <p class="text-xs text-slate-500">
+                    The final answer will be re-generated once all re-run steps complete.
+                  </p>
+                </div>
+                <div class="px-6 py-4 border-t border-slate-700/50 flex items-center gap-3 justify-end">
+                  <button
+                    phx-click="cancel_redo_confirm"
+                    class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-700/60 hover:bg-slate-600/60 text-slate-300 border border-slate-600/40 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    phx-click="confirm_redo_step"
+                    class="px-5 py-2 rounded-xl text-sm font-semibold bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center gap-2"
+                  >
+                    <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Redo
+                  </button>
                 </div>
               </div>
             </div>
@@ -1295,7 +1909,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <div class="max-h-96 overflow-y-auto bg-slate-900/60 rounded-xl p-4">
                   <pre class="text-sm text-slate-200 whitespace-pre-wrap font-sans leading-relaxed">{@final_answer}</pre>
                 </div>
-                <div class="flex gap-3">
+                <div class="flex gap-3 flex-wrap">
                   <button
                     phx-click="accept_answer"
                     class="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
@@ -1308,6 +1922,22 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   >
                     <.icon name="hero-arrow-path" class="w-4 h-4" /> Re-generate
                   </button>
+                  <div class="ml-auto flex gap-2">
+                    <button
+                      phx-click="download_answer"
+                      class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
+                      title="Download final answer as Markdown"
+                    >
+                      <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Answer
+                    </button>
+                    <button
+                      phx-click="download_full_report"
+                      class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
+                      title="Download all step outputs + final answer as Markdown"
+                    >
+                      <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Full report
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1327,6 +1957,22 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <div class="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap prose prose-invert prose-sm max-w-none">
                   {@final_answer}
                 </div>
+                <div class="flex gap-2 mt-4">
+                  <button
+                    phx-click="download_answer"
+                    class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
+                    title="Download final answer as Markdown"
+                  >
+                    <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Download answer
+                  </button>
+                  <button
+                    phx-click="download_full_report"
+                    class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
+                    title="Download all step outputs + final answer as Markdown"
+                  >
+                    <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Download full report
+                  </button>
+                </div>
               </div>
             </div>
           <% end %>
@@ -1340,275 +1986,247 @@ defmodule HierarchyPaiWeb.PlannerLive do
               <div>
                 <p class="text-lg font-semibold text-slate-300">Ready to plan</p>
                 <p class="text-sm text-slate-500 mt-1 max-w-md">
-                  Configure your LLM provider, enter a task, and click
-                  <strong class="text-slate-400">Run Planner</strong>
-                  to start the multi-agent pipeline.
+                  <%= if @saved_providers == [] do %>
+                    Add a provider in the <strong class="text-slate-400">Saved Providers</strong>
+                    panel, then enter a task and click <strong class="text-slate-400">Run Planner</strong>.
+                  <% else %>
+                    Select a provider, enter a task, and click
+                    <strong class="text-slate-400">Run Planner</strong>
+                    to start the multi-agent pipeline.
+                  <% end %>
                 </p>
               </div>
             </div>
           <% end %>
           <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-5 space-y-4 backdrop-blur-sm">
             <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-              <.icon name="hero-cog-6-tooth" class="w-4 h-4 text-violet-400" /> LLM Provider
+              <.icon name="hero-cog-6-tooth" class="w-4 h-4 text-violet-400" /> Planner Provider
             </h2>
 
-            <%!-- Provider selector --%>
-            <div>
-              <label class="block text-xs text-slate-400 mb-1.5 flex items-center justify-between">
-                <span>Provider</span>
-                <span class="text-xs text-slate-500 font-mono">{@provider}</span>
-              </label>
-              <form phx-change="provider_changed" id="provider-form">
+            <%= if @saved_providers == [] do %>
+              <%!-- Empty state: no providers configured --%>
+              <div class="rounded-xl border border-dashed border-slate-600 p-5 flex flex-col items-center text-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-violet-600/10 border border-violet-700/30 flex items-center justify-center">
+                  <.icon name="hero-bolt" class="w-5 h-5 text-violet-500" />
+                </div>
+                <div>
+                  <p class="text-sm font-medium text-slate-300">No providers yet</p>
+                  <p class="text-xs text-slate-500 mt-0.5">
+                    Add at least one provider to run tasks.
+                  </p>
+                </div>
+                <button
+                  phx-click="open_provider_form"
+                  class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-colors"
+                >
+                  <.icon name="hero-plus" class="w-3.5 h-3.5" /> Add Provider
+                </button>
+              </div>
+            <% else %>
+              <%!-- Provider dropdown — select which saved provider drives the planner --%>
+              <div>
+                <label class="block text-xs text-slate-400 mb-1.5">
+                  Select provider for planner &amp; aggregator
+                </label>
+                <form phx-change="update_planner_provider" id="planner-provider-form">
+                  <select
+                    name="provider_id"
+                    disabled={@status != :idle}
+                    class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <%= for entry <- @saved_providers do %>
+                      <option value={entry.id} selected={@planner_provider_id == entry.id}>
+                        {entry.name} — {entry.model}
+                      </option>
+                    <% end %>
+                  </select>
+                </form>
+                <%!-- Selected provider info badge --%>
+                <%= if entry = Enum.find(@saved_providers, &(&1.id == @planner_provider_id)) do %>
+                  <div class="mt-2 flex items-center gap-2 text-xs text-slate-400">
+                    <span class="px-2 py-0.5 rounded-full bg-slate-700 border border-slate-600 font-mono">
+                      {entry.provider}
+                    </span>
+                    <span class="text-slate-500">·</span>
+                    <span class="truncate">{entry.model}</span>
+                  </div>
+                <% end %>
+              </div>
+
+              <%!-- Max retries --%>
+              <div>
+                <label class="block text-xs text-slate-400 mb-1.5">
+                  Chain retries (bad response)
+                </label>
                 <select
-                  name="provider"
+                  phx-change="update_max_retries"
+                  name="max_retries"
                   disabled={@status != :idle}
                   class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <%= for {label, value} <- @providers do %>
-                    <option value={value} selected={@provider == value}>{label}</option>
+                  <%= for n <- [0, 1, 2, 3, 5] do %>
+                    <option value={n} selected={@max_retries == n}>{n}</option>
                   <% end %>
                 </select>
-              </form>
-            </div>
-
-            <%!-- API key (cloud providers only) --%>
-            <%= if @provider in [:openai, :anthropic] do %>
-              <div>
-                <label class="block text-xs text-slate-400 mb-1.5 flex items-center justify-between">
-                  <span>API Key</span>
-                  <%= if String.trim(@api_key) != "" do %>
-                    <span class="text-emerald-400 text-xs flex items-center gap-1">
-                      <.icon name="hero-check-circle" class="w-3 h-3" /> Key set
-                    </span>
-                  <% end %>
-                </label>
-                <div class="relative">
-                  <input
-                    id="api-key-input"
-                    type="password"
-                    phx-blur="update_api_key"
-                    phx-change="update_api_key"
-                    phx-debounce="300"
-                    name="api_key"
-                    value={@api_key}
-                    disabled={@status != :idle}
-                    placeholder={
-                      case @provider do
-                        :openai -> "sk-..."
-                        :anthropic -> "sk-ant-..."
-                        _ -> "API key"
-                      end
-                    }
-                    class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 pr-10 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                  />
-                  <button
-                    type="button"
-                    onclick="const i=document.getElementById('api-key-input');i.type=i.type==='password'?'text':'password';this.querySelector('span').textContent=i.type==='password'?'Show':'Hide'"
-                    class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors text-xs select-none"
-                    tabindex="-1"
-                  >
-                    <span>Show</span>
-                  </button>
-                </div>
-                <%= case @provider do %>
-                  <% :openai -> %>
-                    <p class="mt-1 text-xs text-slate-500">
-                      Get your key at
-                      <a
-                        href="https://platform.openai.com/api-keys"
-                        target="_blank"
-                        class="text-violet-400 hover:text-violet-300 underline"
-                      >
-                        platform.openai.com/api-keys
-                      </a>
-                    </p>
-                  <% :anthropic -> %>
-                    <p class="mt-1 text-xs text-slate-500">
-                      Get your key at
-                      <a
-                        href="https://console.anthropic.com/settings/keys"
-                        target="_blank"
-                        class="text-violet-400 hover:text-violet-300 underline"
-                      >
-                        console.anthropic.com
-                      </a>
-                    </p>
-                  <% _ -> %>
-                <% end %>
+                <p class="mt-1 text-xs text-slate-500">
+                  Re-sends when the LLM returns malformed JSON. Min 1 recommended.
+                </p>
               </div>
             <% end %>
+          </div>
 
-            <%!-- Custom endpoint --%>
-            <%= if @provider == :custom do %>
-              <div>
-                <label class="block text-xs text-slate-400 mb-1.5">Endpoint URL</label>
+          <%!-- Saved Providers panel --%>
+          <div class="bg-slate-800/40 border border-slate-700/30 rounded-2xl p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <.icon name="hero-bookmark" class="w-3.5 h-3.5 text-violet-400" /> Saved Providers
+                <%= if @saved_providers != [] do %>
+                  <span class="ml-1 bg-violet-600/30 text-violet-300 text-xs px-1.5 py-0.5 rounded-full">
+                    {length(@saved_providers)}
+                  </span>
+                <% end %>
+              </p>
+              <button
+                phx-click="open_provider_form"
+                class="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1 transition-colors"
+              >
+                <.icon name="hero-plus" class="w-3 h-3" /> Add
+              </button>
+            </div>
+
+            <%!-- Provider form (add / edit) --%>
+            <%= if @provider_form do %>
+              <% pf = @provider_form %>
+              <form
+                phx-change="provider_form_change"
+                phx-submit="save_provider_form"
+                id="saved-provider-form"
+                class="space-y-2 bg-slate-900/60 rounded-xl p-3 border border-slate-700/50"
+              >
+                <p class="text-xs font-medium text-slate-300">
+                  {if pf[:id], do: "Edit provider", else: "New provider"}
+                </p>
+
+                <%!-- Name --%>
                 <input
                   type="text"
-                  phx-blur="update_endpoint"
-                  phx-change="update_endpoint"
-                  name="endpoint"
-                  value={@custom_endpoint}
-                  disabled={@status != :idle}
-                  placeholder="http://localhost:1337/v1/chat/completions"
-                  class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                  name="saved_provider[name]"
+                  value={pf[:name]}
+                  placeholder="e.g. My Copilot"
+                  class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
                 />
-              </div>
-            <% end %>
 
-            <%!-- Local server URL --%>
-            <%= if LLMProvider.local_provider?(@provider) do %>
-              <div>
-                <label class="block text-xs text-slate-400 mb-1.5 flex items-center justify-between">
-                  <span>Server URL</span>
-                  <%= if @wsl2 do %>
-                    <span class="text-amber-400 text-xs flex items-center gap-1">
-                      <.icon name="hero-exclamation-triangle" class="w-3 h-3" /> WSL2 detected
-                    </span>
+                <%!-- Provider type --%>
+                <select
+                  name="saved_provider[provider]"
+                  class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                >
+                  <%= for {label, val} <- @providers do %>
+                    <option value={val} selected={pf[:provider] == val}>{label}</option>
                   <% end %>
-                </label>
-                <div class="flex gap-2">
+                </select>
+
+                <%!-- Model --%>
+                <%= if LLMProvider.default_models(pf[:provider] || :openai) != [] do %>
+                  <select
+                    name="saved_provider[model]"
+                    class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                  >
+                    <%= for m <- LLMProvider.default_models(pf[:provider] || :openai) do %>
+                      <option value={m} selected={pf[:model] == m}>{m}</option>
+                    <% end %>
+                  </select>
+                <% else %>
                   <input
                     type="text"
-                    phx-blur="update_local_host"
-                    phx-change="update_local_host"
-                    name="local_host"
-                    value={@local_host}
-                    disabled={@status != :idle}
-                    placeholder={
-                      if @provider == :jan_ai,
-                        do: "http://127.0.0.1:1337",
-                        else: "http://127.0.0.1:11434"
-                    }
-                    class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed font-mono"
+                    name="saved_provider[model]"
+                    value={pf[:model]}
+                    placeholder="model name"
+                    class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
                   />
+                <% end %>
+
+                <%!-- API key (if needed) --%>
+                <%= if pf[:provider] in [:openai, :anthropic, :github_copilot, :custom] do %>
+                  <input
+                    type="password"
+                    name="saved_provider[api_key]"
+                    value={pf[:api_key]}
+                    placeholder={
+                      case pf[:provider] do
+                        :github_copilot -> "github_pat_..."
+                        :openai -> "sk-..."
+                        :anthropic -> "sk-ant-..."
+                        _ -> "API key (optional)"
+                      end
+                    }
+                    class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                  />
+                <% end %>
+
+                <%!-- Endpoint (custom only; GitHub Copilot URL is fixed) --%>
+                <%= if pf[:provider] == :custom do %>
+                  <input
+                    type="text"
+                    name="saved_provider[endpoint]"
+                    value={pf[:endpoint]}
+                    placeholder="https://..."
+                    class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                  />
+                <% end %>
+
+                <div class="flex gap-2 pt-1">
                   <button
-                    phx-click="check_local_host"
-                    disabled={@status != :idle}
-                    class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    type="submit"
+                    class="flex-1 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium py-1.5 rounded-lg transition-colors"
                   >
-                    Check
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="cancel_provider_form"
+                    class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-medium py-1.5 rounded-lg transition-colors"
+                  >
+                    Cancel
                   </button>
                 </div>
-                <%= if @wsl2 do %>
-                  <p class="mt-1.5 text-xs text-amber-400/80 leading-relaxed">
-                    Running in WSL2. If Jan.ai is on Windows, try the gateway IP
-                    (e.g. <code class="text-amber-300">http://172.x.x.x:1337</code>).
-                  </p>
-                <% end %>
-              </div>
+              </form>
             <% end %>
 
-            <%!-- Model selector --%>
-            <div>
-              <label class="block text-xs text-slate-400 mb-1.5">Model</label>
-
-              <%= cond do %>
-                <% LLMProvider.local_provider?(@provider) and @local_server_status == :checking -> %>
-                  <div class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 flex items-center gap-2 text-sm text-slate-400">
-                    <.icon name="hero-arrow-path" class="w-4 h-4 animate-spin text-violet-400" />
-                    Checking server&hellip;
-                  </div>
-                <% LLMProvider.local_provider?(@provider) and @local_server_status == :offline -> %>
-                  <div class="w-full bg-red-900/20 border border-red-700/40 rounded-lg px-3 py-2.5 text-sm text-red-400 flex items-start gap-2">
-                    <.icon name="hero-x-circle" class="w-4 h-4 mt-0.5 shrink-0" />
-                    <span>
-                      Server not reachable.
-                      Start it then <button
-                        phx-click="retry_local_server"
-                        class="underline text-red-300 hover:text-red-200"
-                      >
-                          retry
-                        </button>.
-                    </span>
-                  </div>
-                <% LLMProvider.local_provider?(@provider) and @local_server_status == :online and @local_models == [] -> %>
-                  <div class="w-full bg-yellow-900/20 border border-yellow-700/40 rounded-lg px-3 py-2.5 text-sm text-yellow-400 flex items-start gap-2">
-                    <.icon name="hero-exclamation-triangle" class="w-4 h-4 mt-0.5 shrink-0" />
-                    <span>
-                      Server is running but no models are loaded. Load a model in Jan.ai, then <button
-                        phx-click="retry_local_server"
-                        class="underline text-yellow-300 hover:text-yellow-200"
-                      >
-                          refresh
-                        </button>.
-                    </span>
-                  </div>
-                <% LLMProvider.local_provider?(@provider) and @local_server_status == :online -> %>
-                  <form phx-change="provider_model_selected" id="local-model-form">
-                    <select
-                      name="model"
-                      disabled={@status != :idle}
-                      class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <%= for m <- @local_models do %>
-                        <option value={m} selected={@model == m}>{m}</option>
-                      <% end %>
-                    </select>
-                  </form>
-                  <div class="flex items-center justify-between mt-1.5">
-                    <span class="text-xs text-emerald-500 flex items-center gap-1">
-                      <.icon name="hero-check-circle" class="w-3 h-3" />
-                      {length(@local_models)} model(s) available
-                    </span>
-                    <button
-                      phx-click="retry_local_server"
-                      class="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1 transition-colors"
-                    >
-                      <.icon name="hero-arrow-path" class="w-3 h-3" /> Refresh
-                    </button>
-                  </div>
-                <% true -> %>
-                  <%= if LLMProvider.default_models(@provider) != [] do %>
-                    <%!-- Cloud provider with known models: dropdown --%>
-                    <form phx-change="provider_model_selected" id="cloud-model-form">
-                      <select
-                        name="model"
-                        disabled={@status != :idle}
-                        class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <%= for m <- LLMProvider.default_models(@provider) do %>
-                          <option value={m} selected={@model == m}>{m}</option>
-                        <% end %>
-                      </select>
-                    </form>
-                  <% else %>
-                    <%!-- Custom / unknown provider: free-text input --%>
-                    <input
-                      type="text"
-                      phx-blur="update_model"
-                      phx-change="update_model"
-                      name="model"
-                      value={@model}
-                      disabled={@status != :idle}
-                      placeholder="model name"
-                      class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                    />
-                  <% end %>
-              <% end %>
-            </div>
-
-            <%!-- Max retries --%>
-            <div>
-              <label class="block text-xs text-slate-400 mb-1.5 flex items-center justify-between">
-                <span>Chain retries (bad response)</span>
-                <%= if LLMProvider.local_provider?(@provider) do %>
-                  <span class="text-emerald-400 text-xs">network retries already off</span>
-                <% end %>
-              </label>
-              <select
-                phx-change="update_max_retries"
-                name="max_retries"
-                disabled={@status != :idle}
-                class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <%= for n <- [0, 1, 2, 3, 5] do %>
-                  <option value={n} selected={@max_retries == n}>{n}</option>
-                <% end %>
-              </select>
-              <p class="mt-1 text-xs text-slate-500">
-                Re-sends when the LLM returns malformed JSON or an unexpected format. Min 1 recommended. Network timeouts don't retry for local models.
+            <%!-- Saved providers list --%>
+            <%= if @saved_providers == [] and is_nil(@provider_form) do %>
+              <p class="text-xs text-slate-500 text-center py-2">
+                No saved providers yet. Add one or save the current config.
               </p>
-            </div>
+            <% end %>
+
+            <%= for sp <- @saved_providers do %>
+              <div class="flex items-center gap-2 py-2 border-b border-slate-700/40 last:border-0">
+                <div class="flex-1 min-w-0">
+                  <p class="text-xs font-medium text-slate-200 truncate">{sp.name}</p>
+                  <p class="text-xs text-slate-500 truncate">
+                    {sp.model} &middot; {sp.provider}
+                  </p>
+                </div>
+                <button
+                  phx-click="edit_saved_provider"
+                  phx-value-id={sp.id}
+                  class="text-slate-500 hover:text-slate-300 transition-colors"
+                  title="Edit"
+                >
+                  <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
+                </button>
+                <button
+                  phx-click="delete_saved_provider"
+                  phx-value-id={sp.id}
+                  data-confirm="Delete this saved provider?"
+                  class="text-slate-500 hover:text-red-400 transition-colors"
+                  title="Delete"
+                >
+                  <.icon name="hero-trash" class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            <% end %>
           </div>
 
           <%!-- About card --%>

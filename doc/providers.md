@@ -1,6 +1,8 @@
 # LLM Provider Setup
 
-Hierarchical Planner AI supports five LLM providers. All configuration is done through the **LLM Provider** panel at the bottom of the UI — no environment variables or config files required.
+Hierarchical Planner AI uses **Saved Providers** as the single source of LLM configuration. All provider credentials are registered once in the **Saved Providers** panel and reused throughout the pipeline — no environment variables or config files required.
+
+> **Before running any task**, you must add at least one provider in the **Saved Providers** panel. The Run Planner button is disabled until a provider exists.
 
 ---
 
@@ -12,6 +14,7 @@ Hierarchical Planner AI supports five LLM providers. All configuration is done t
 | Ollama | Local | None | Auto-detected |
 | OpenAI | Cloud | Required | Dropdown |
 | Anthropic | Cloud | Required | Dropdown |
+| GitHub Models | Cloud | Fine-grained PAT | Dropdown |
 | Custom endpoint | Any | Optional | Free text |
 
 ---
@@ -177,3 +180,84 @@ Found in the **LLM Provider** panel under **Chain retries (bad response)**:
 
 > **Local models**: set retries to `1`. Retries can triple your wait time if the model times out.
 > **Cloud providers**: `2` is a safe default.
+
+---
+
+## GitHub Models
+
+GitHub Models exposes an OpenAI-compatible inference API at `https://models.github.ai/inference`.
+This is the official GitHub service for accessing AI models, not the GitHub Copilot coding assistant.
+
+### Requirements
+- A free GitHub account (rate-limited) or a **GitHub Models** subscription
+- A **fine-grained Personal Access Token** with the **`models:read`** scope
+
+### Setup
+
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
+2. Create a new token with the **`models:read`** permission enabled
+3. In Hierarchical Planner AI, select **GitHub Models** as the provider
+4. Paste the `github_pat_...` token in the API Key field
+5. The endpoint (`https://models.github.ai/inference/chat/completions`) is pre-filled automatically
+
+> **Note**: Classic PATs (`ghp_...`) do **not** work — only fine-grained PATs (`github_pat_...`) support the `models:read` scope.
+
+### Available Models
+
+| Model | Notes |
+|---|---|
+| `openai/gpt-4o` | Best quality |
+| `openai/gpt-4o-mini` | Faster, lower cost |
+| `openai/o3-mini` | Reasoning model |
+| `anthropic/claude-3-5-sonnet` | Anthropic via GitHub Models |
+| `anthropic/claude-3-5-haiku` | Faster Anthropic model |
+| `meta/meta-llama-3.1-405b-instruct` | Open-source Llama |
+| `mistral-ai/mistral-large-2407` | Mistral model |
+
+> Model names must include the `{publisher}/{model}` prefix as shown above.
+
+---
+
+## Saved Providers
+
+The **Saved Providers** panel is the **primary and required** way to configure LLM providers. Every saved provider is stored in ETS (shared across browser sessions on the same server node) and can be selected for:
+
+1. **Planner & Aggregator** — chosen via the **Planner Provider** dropdown in the sidebar
+2. **Individual steps** — overridable per-step in the **Review** phase
+
+### Why use saved providers?
+
+- **Required to run**: the planner can only execute when at least one provider is saved
+- Mix providers per step — e.g. use a fast local model for research and GPT-4o for writing
+- Store credentials once, reuse across the session
+- Quickly switch between configurations without re-entering API keys
+
+### Managing saved providers
+
+| Action | How |
+|---|---|
+| **Add** | Click **+ Add** in the Saved Providers panel |
+| **Edit** | Click the pencil icon next to any saved provider |
+| **Delete** | Click the trash icon |
+
+### Selecting the planner provider
+
+The **Planner Provider** card (above the task input) shows a dropdown of all saved providers. The selected provider is used for:
+- The **Planner** agent (generates the step plan)
+- The **Aggregator** agent (synthesises the final answer)
+- As the **default** for any step that has no per-step override
+
+When a new provider is saved and no planner provider is selected yet, it is automatically selected.
+
+### Using saved providers in Review
+
+When you have saved providers, the per-step provider selector in the Review phase shows two dropdowns:
+
+1. **Provider** — select a saved provider by name (e.g. "My Jan.ai", "GPT-4o")
+2. **Model** — list of available models for that provider, defaulting to the model stored in the saved entry
+
+You can override the model per-step without affecting the saved entry.
+
+### Lifecycle
+
+> ⚠️ **Saved providers are stored in memory (ETS).** They are shared across all browser sessions on the same server node but are **lost when the server restarts**. Persistent storage is planned — see the [Roadmap](../README.md#%EF%B8%8F-roadmap--todo).
