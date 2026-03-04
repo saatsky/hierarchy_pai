@@ -33,10 +33,13 @@ defmodule HierarchyPai.LLMProvider do
   Returns `true` when running inside WSL2.
   """
   def wsl2? do
-    case File.read("/proc/sys/kernel/osrelease") do
-      {:ok, content} -> String.downcase(content) =~ "microsoft"
-      _ -> false
-    end
+    # /.dockerenv is present in all Docker containers — Docker on Windows also
+    # has "microsoft" in the kernel osrelease, but it is not WSL2.
+    not File.exists?("/.dockerenv") and
+      case File.read("/proc/sys/kernel/osrelease") do
+        {:ok, content} -> String.downcase(content) =~ "microsoft"
+        _ -> false
+      end
   end
 
   @doc """
@@ -45,12 +48,18 @@ defmodule HierarchyPai.LLMProvider do
   """
   def windows_host_ip do
     with true <- wsl2?(),
-         {output, 0} <- System.cmd("ip", ["route", "show", "default"]),
+         {output, 0} <- safe_cmd("ip", ["route", "show", "default"]),
          [_default, _via, ip | _] <- String.split(output) do
       String.trim(ip)
     else
       _ -> nil
     end
+  end
+
+  defp safe_cmd(cmd, args) do
+    System.cmd(cmd, args)
+  rescue
+    _ -> {nil, 1}
   end
 
   @doc """
