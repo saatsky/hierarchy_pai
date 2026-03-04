@@ -9,8 +9,9 @@ Hierarchical Planner AI decomposes a complex task into parallel, dependency-awar
 ## ✨ Features
 
 - **Hierarchical planning** — a Planner agent breaks any goal into 3–8 structured steps with explicit dependencies
+- **Specialist AI agents** — the Planner automatically assigns one of 12 domain experts (Backend Architect, Frontend Developer, AI Engineer, etc.) to each step; fully overridable in the review phase
 - **Parallel wave execution** — independent steps run concurrently; dependent steps wait only for their specific prerequisites
-- **Real-time Kanban board** — watch steps move through Queue → Running → Done / Failed live
+- **Real-time Kanban board** — watch steps move through Queue → Running → Done / Failed live, with the agent specialist shown on each card
 - **Per-step model selection** — assign a different LLM model to each step
 - **Step output preview** — click any completed step card to read the full output before it reaches the aggregator
 - **Failure recovery** — retry only the failed steps, or skip them and aggregate what succeeded
@@ -29,13 +30,13 @@ User Input
 ┌─────────────┐
 │   Planner   │  1 LLM call → structured JSON plan (steps + dependencies)
 └──────┬──────┘
-       │  Plan Review (user accepts/rejects steps, assigns models)
+       │  Plan Review (user accepts/rejects steps, assigns models + specialist agent)
        ▼
 ┌─────────────────────────────────────┐
 │         Execution Waves             │
-│  Wave 1: [Step A] [Step B]  ──────► │  parallel via Task.async_stream
-│  Wave 2: [Step C]           ──────► │  (C depends on A or B)
-│  Wave 3: [Step D]           ──────► │
+│  Wave 1: [Step A 🏗] [Step B 📝] ──►│  parallel, each with specialist prompt
+│  Wave 2: [Step C 🔍]           ───►│  (C depends on A or B)
+│  Wave 3: [Step D 📊]           ───►│
 └──────────────────┬──────────────────┘
                    │  Failure → action panel (retry / skip / cancel)
                    ▼
@@ -114,6 +115,29 @@ All LLM provider settings are configured through the **LLM Provider** panel in t
 
 ---
 
+## 🤖 Specialist Agents
+
+Each step in the plan is automatically assigned a **specialist agent** by the Planner based on the nature of the work. You can override any assignment during the plan review phase.
+
+| Agent | Icon | Best For |
+|---|---|---|
+| General Executor | ⚡ | Generic or uncategorised tasks |
+| Backend Architect | 🏗️ | API design, DB schemas, system architecture |
+| Frontend Developer | 🎨 | UI components, CSS, accessibility, web performance |
+| AI Engineer | 🤖 | LLM pipelines, RAG, embeddings, ML integration |
+| DevOps Automator | 🚀 | CI/CD, Docker, Kubernetes, infrastructure |
+| Rapid Prototyper | ⚡ | Quick POCs, MVPs, proof-of-concept code |
+| Content Creator | 📝 | Writing, copywriting, documentation |
+| Trend Researcher | 🔍 | Market research, competitive analysis |
+| Feedback Synthesizer | 💬 | Qualitative analysis, insight extraction |
+| Data Analytics | 📊 | Metrics, KPIs, dashboards, reports |
+| Sprint Prioritizer | 🎯 | Backlog management, sprint planning |
+| Growth Hacker | 📈 | GTM strategy, acquisition, experiments |
+
+See [Specialist Agents](doc/agents.md) for full details on each agent's persona and capabilities.
+
+---
+
 ## 📦 Project Structure
 
 ```
@@ -121,25 +145,26 @@ hierarchy_pai/
 ├── lib/
 │   ├── hierarchy_pai/
 │   │   ├── agents/
-│   │   │   ├── planner.ex        # Decomposes task into JSON plan
-│   │   │   ├── executor.ex       # Runs a single step with context
-│   │   │   └── aggregator.ex     # Synthesises all step outputs
-│   │   ├── orchestrator.ex       # Wave-based parallel execution
-│   │   └── llm_provider.ex       # Builds LangChain models per provider
+│   │   │   ├── agent_registry.ex  # 12 specialist personas + system prompts
+│   │   │   ├── planner.ex         # Decomposes task into JSON plan
+│   │   │   ├── executor.ex        # Runs a single step with specialist prompt
+│   │   │   └── aggregator.ex      # Synthesises all step outputs
+│   │   ├── orchestrator.ex        # Wave-based parallel execution
+│   │   └── llm_provider.ex        # Builds LangChain models per provider
 │   └── hierarchy_pai_web/
 │       ├── live/
-│       │   └── planner_live.ex   # Main LiveView (UI + state machine)
+│       │   └── planner_live.ex    # Main LiveView (UI + state machine)
 │       └── router.ex
 ├── assets/
-│   ├── css/app.css               # Tailwind CSS v4
-│   └── js/app.js                 # LiveView + colocated hooks
+│   ├── css/app.css                # Tailwind CSS v4
+│   └── js/app.js                  # LiveView + colocated hooks
 ├── config/
 │   ├── config.exs
 │   ├── prod.exs
-│   └── runtime.exs               # Reads env vars at startup
-├── Dockerfile                    # Multi-stage Docker build
+│   └── runtime.exs                # Reads env vars at startup
+├── Dockerfile                     # Multi-stage Docker build
 ├── docker-compose.yml
-└── doc/                          # Documentation
+└── doc/                           # Documentation
 ```
 
 ---
@@ -161,5 +186,28 @@ mix assets.deploy     # build production assets
 |---|---|
 | [Installation](doc/installation.md) | Detailed setup for local dev, Docker, and releases |
 | [LLM Provider Setup](doc/providers.md) | How to configure Jan.ai, Ollama, OpenAI, Anthropic |
-| [Task Examples](doc/examples.md) | Sample prompts with expected outputs |
+| [Specialist Agents](doc/agents.md) | All 12 agent types, their expertise, and how to assign them |
+| [Task Examples](doc/examples.md) | Sample prompts with expected outputs and agent assignments |
 | [Troubleshooting](doc/troubleshooting.md) | Common errors and how to fix them |
+
+---
+
+## 🗺️ Roadmap / TODO
+
+### 🗄️ Persistence (not yet implemented)
+
+The app is currently **stateless** — all pipeline data (plans, step outputs, final answers) lives only in the LiveView process and is lost on page refresh or server restart. There is no database layer.
+
+Planned persistence work:
+
+- [ ] **Pipeline history** — save each run (task, plan, step outputs, final answer, timestamp) to a database so users can browse and revisit past results
+- [ ] **Resume interrupted runs** — if a run is interrupted (browser closed, timeout), allow the user to reload and continue from where it left off
+- [ ] **Export results** — download the final answer and step outputs as Markdown or JSON
+- [ ] **Provider config persistence** — save LLM provider settings (provider, model, endpoint) in the browser via `localStorage` so users don't have to reconfigure on every visit (API keys should never be persisted server-side)
+- [ ] **Authentication** — add user accounts (Ash Authentication) so each user sees only their own pipeline history
+
+### Other planned improvements
+
+- [ ] **Streaming step output in modal** — the step output modal currently shows the final result; stream tokens live as the step executes
+- [ ] **File/image input** — allow users to attach files or images as additional context for the task
+- [ ] **Custom agent personas** — let users define and save their own specialist agent prompts through the UI

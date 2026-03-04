@@ -1,6 +1,6 @@
 # Task Examples
 
-This page shows real prompts you can paste into Hierarchical Planner AI, along with the expected plan structure and tips for each use case.
+This page shows real prompts you can paste into Hierarchical Planner AI, along with the expected plan structure, recommended specialist agents, and tips for each use case.
 
 ---
 
@@ -10,9 +10,12 @@ This page shows real prompts you can paste into Hierarchical Planner AI, along w
 2. Copy a prompt from below into the **Task** text area
 3. Click **Run Planner**
 4. Review the generated plan — accept, reject, or adjust individual steps
-5. Optionally assign different models to specific steps
-6. Click **Run accepted steps**
-7. Review the final synthesised answer
+5. Check the **Specialist** dropdown on each step — override if the Planner's choice isn't ideal
+6. Optionally assign different LLM models to specific steps
+7. Click **Run accepted steps**
+8. Review the final synthesised answer
+
+> **Tip:** The Planner auto-assigns specialist agents to each step. The examples below show the *expected* agent assignments — if your Planner chooses differently, you can correct them in the review phase.
 
 ---
 
@@ -27,12 +30,12 @@ schemas, error handling conventions, rate limiting approach, and
 OpenAPI specification outline.
 ```
 
-**Expected plan (~5 steps):**
-1. Define data models and relationships
-2. Design authentication & authorisation (JWT / OAuth2)
-3. Specify resource endpoints and HTTP methods
-4. Define request/response schemas and error codes
-5. Outline OpenAPI spec and rate limiting strategy
+**Expected plan (~5 steps) with agent assignments:**
+1. Define data models and relationships — 🏗️ *Backend Architect*
+2. Design authentication & authorisation (JWT / OAuth2) — 🏗️ *Backend Architect*
+3. Specify resource endpoints and HTTP methods — 🏗️ *Backend Architect*
+4. Define request/response schemas and error codes — 🏗️ *Backend Architect*
+5. Outline OpenAPI spec and rate limiting strategy — 🏗️ *Backend Architect*
 
 ---
 
@@ -44,13 +47,13 @@ using FastAPI and PostgreSQL. Cover security, performance, testing,
 documentation, and maintainability concerns.
 ```
 
-**Expected plan (~6 steps):**
-1. Security review items (SQL injection, auth, secrets)
-2. Performance and query optimisation
-3. Test coverage requirements
-4. API documentation standards
-5. Error handling and logging
-6. Code style and maintainability
+**Expected plan (~6 steps) with agent assignments:**
+1. Security review items (SQL injection, auth, secrets) — 🏗️ *Backend Architect*
+2. Performance and query optimisation — 🏗️ *Backend Architect*
+3. Test coverage requirements — ⚡ *General Executor*
+4. API documentation standards — 📝 *Content Creator*
+5. Error handling and logging — 🏗️ *Backend Architect*
+6. Code style and maintainability — ⚡ *General Executor*
 
 ---
 
@@ -62,6 +65,8 @@ monolith to a microservices architecture. The system handles 50k requests/day
 and cannot have more than 30 seconds of downtime.
 ```
 
+**Expected agent assignments:** 🏗️ Backend Architect throughout, with 🚀 DevOps Automator for the deployment/rollout steps.
+
 ---
 
 ### Technology evaluation
@@ -72,6 +77,8 @@ a real-time dashboard application. Compare them on: developer experience,
 performance, ecosystem maturity, testing story, and bundle size. Recommend
 the best choice with justification.
 ```
+
+**Expected agent assignments:** 🔍 Trend Researcher for research steps, 🎨 Frontend Developer for performance/implementation assessment.
 
 ---
 
@@ -86,13 +93,13 @@ key players and their positioning, emerging trends, barriers to entry,
 and opportunities for a new entrant targeting remote teams.
 ```
 
-**Expected plan (~6 steps):**
-1. Market size and growth data
-2. Key players landscape
-3. Feature and pricing comparison
-4. Emerging trends and technology shifts
-5. Competitive barriers
-6. Opportunity analysis and recommendations
+**Expected plan (~6 steps) with agent assignments:**
+1. Market size and growth data — 🔍 *Trend Researcher*
+2. Key players landscape — 🔍 *Trend Researcher*
+3. Feature and pricing comparison — 🔍 *Trend Researcher*
+4. Emerging trends and technology shifts — 🔍 *Trend Researcher*
+5. Competitive barriers — 🔍 *Trend Researcher*
+6. Opportunity analysis and recommendations — 💬 *Feedback Synthesizer*
 
 ---
 
@@ -165,12 +172,12 @@ week-by-week milestones, risk register, team responsibilities, definition
 of done for MVP, and launch checklist.
 ```
 
-**Expected plan (~5 steps):**
-1. Scope definition and MVP feature list
-2. Week-by-week timeline and milestones
-3. Team responsibilities and RACI matrix
-4. Risk register and mitigation strategies
-5. Launch checklist and go-live criteria
+**Expected plan (~5 steps) with agent assignments:**
+1. Scope definition and MVP feature list — 🎯 *Sprint Prioritizer*
+2. Week-by-week timeline and milestones — 🎯 *Sprint Prioritizer*
+3. Team responsibilities and RACI matrix — ⚡ *General Executor*
+4. Risk register and mitigation strategies — ⚡ *General Executor*
+5. Launch checklist and go-live criteria — 🚀 *DevOps Automator*
 
 ---
 
@@ -235,6 +242,14 @@ and a practice question set for each domain.
 - **Too broad**: "Write a complete e-commerce platform" — the planner will create steps that are individually too large for one LLM call
 - **Too narrow**: "Write a function to sort a list" — doesn't benefit from multi-agent decomposition; just use a regular chat
 - **Just right**: Tasks that naturally break into 3–8 distinct parallel workstreams
+
+### Specialist agent selection
+
+After the plan is generated, review the **Specialist** dropdown on each step card:
+- **Let the Planner choose first** — it assigns specialists automatically based on step content
+- **Override for research tasks** — the Planner sometimes defaults to `executor` for research; change to 🔍 *Trend Researcher* or 💬 *Feedback Synthesizer*
+- **Override for writing tasks** — change to 📝 *Content Creator* for any step that produces prose, copy, or documentation
+- **Smaller local models** — if using Jan.ai or Ollama with a 7B–8B model, consider switching all steps to ⚡ *General Executor* since smaller models may ignore rich persona prompts
 
 ### Per-step model assignment
 

@@ -8,6 +8,8 @@ defmodule HierarchyPai.Agents.Planner do
   alias LangChain.Message
   alias LangChain.MessageProcessors.JsonProcessor
 
+  @agent_types HierarchyPai.Agents.AgentRegistry.agent_types()
+
   @system_prompt """
   You are a Hierarchical Planner Agent.
   Your job is to break down the user's task into 3–8 clear, actionable steps.
@@ -23,6 +25,7 @@ defmodule HierarchyPai.Agents.Planner do
         "title": "short step title",
         "instruction": "detailed instruction for this step",
         "tool": "llm",
+        "agent_type": "executor",
         "expected_output": "what this step should produce",
         "depends_on": []
       }
@@ -33,6 +36,14 @@ defmodule HierarchyPai.Agents.Planner do
   - Always set "tool" to "llm" for all steps.
   - Keep steps independent and concrete.
   - Set `depends_on` to a list of step IDs this step requires to complete first. Steps with no dependencies have `depends_on: []`.
+  - Set `agent_type` to the most appropriate specialist for each step. Choose from: #{Enum.join(@agent_types, ", ")}.
+    Use "executor" as the default when no specialist fits. Match the agent to the nature of the work:
+    use "backend_architect" for API/DB/system design, "frontend_developer" for UI/UX steps,
+    "ai_engineer" for ML/AI pipeline steps, "devops_automator" for CI/CD/infrastructure,
+    "content_creator" for writing/documentation, "trend_researcher" for market/competitive research,
+    "feedback_synthesizer" for analysis/synthesis, "data_analytics" for metrics/reporting,
+    "sprint_prioritizer" for planning/backlog work, "growth_hacker" for GTM/acquisition strategy,
+    "rapid_prototyper" for quick POCs or MVPs.
   - Return ONLY valid JSON — absolutely no other text.
   """
 

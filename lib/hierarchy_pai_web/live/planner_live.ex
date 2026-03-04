@@ -2,6 +2,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
   use HierarchyPaiWeb, :live_view
 
   alias HierarchyPai.LLMProvider
+  alias HierarchyPai.Agents.AgentRegistry
 
   @providers [
     {"Jan.ai (local)", :jan_ai},
@@ -48,6 +49,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:selected_step_id, nil)
      |> assign(:step_outputs, %{})
      |> assign(:step_streams, %{})
+     |> assign(:step_agent_types, %{})
      |> assign(:selected_step_id, nil)
      |> assign(:current_step_id, nil)
      |> assign(:final_stream, "")
@@ -169,6 +171,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
        |> assign(:step_statuses, %{})
        |> assign(:step_errors, %{})
        |> assign(:step_outputs, %{})
+       |> assign(:step_agent_types, %{})
        |> assign(:selected_step_id, nil)
        |> assign(:step_streams, %{})
        |> assign(:current_step_id, nil)
@@ -187,9 +190,19 @@ defmodule HierarchyPaiWeb.PlannerLive do
   def handle_event("start_execution", _params, socket) do
     accepted_step_ids = socket.assigns.accepted_steps
     plan = socket.assigns.plan
+    step_agent_types = socket.assigns.step_agent_types
     step_configs = socket.assigns.step_configs
     default_config = build_provider_config(socket.assigns)
     topic = socket.assigns.pubsub_topic
+
+    # Merge user-selected agent types into each step before execution
+    plan_with_agents =
+      update_in(plan["steps"], fn steps ->
+        Enum.map(steps, fn step ->
+          agent_type = Map.get(step_agent_types, step["id"], step["agent_type"] || "executor")
+          Map.put(step, "agent_type", agent_type)
+        end)
+      end)
 
     step_statuses =
       accepted_step_ids
@@ -201,7 +214,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
       Task.start(fn ->
         try do
           HierarchyPai.Orchestrator.execute(
-            plan,
+            plan_with_agents,
             accepted_step_ids,
             step_configs,
             default_config,
@@ -222,6 +235,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
     {:noreply,
      socket
      |> assign(:status, :executing)
+     |> assign(:plan, plan_with_agents)
      |> assign(:step_statuses, step_statuses)
      |> assign(:step_errors, %{})
      |> assign(:step_outputs, %{})
@@ -270,6 +284,16 @@ defmodule HierarchyPaiWeb.PlannerLive do
     id = String.to_integer(id_str)
     cfg = %{provider: String.to_existing_atom(p), model: m, api_key: socket.assigns.api_key}
     {:noreply, update(socket, :step_configs, &Map.put(&1, id, cfg))}
+  end
+
+  @impl true
+  def handle_event(
+        "update_step_agent_type",
+        %{"step_id" => id_str, "agent_type" => agent_type},
+        socket
+      ) do
+    id = String.to_integer(id_str)
+    {:noreply, update(socket, :step_agent_types, &Map.put(&1, id, agent_type))}
   end
 
   @impl true
@@ -329,6 +353,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:step_statuses, %{})
      |> assign(:step_errors, %{})
      |> assign(:step_outputs, %{})
+     |> assign(:step_agent_types, %{})
      |> assign(:selected_step_id, nil)
      |> assign(:error, nil)}
   end
@@ -367,6 +392,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:step_statuses, %{})
      |> assign(:step_errors, %{})
      |> assign(:step_outputs, %{})
+     |> assign(:step_agent_types, %{})
      |> assign(:selected_step_id, nil)
      |> assign(:step_streams, %{})
      |> assign(:current_step_id, nil)
@@ -518,11 +544,17 @@ defmodule HierarchyPaiWeb.PlannerLive do
   def handle_info({:orchestrator, {:plan_ready, plan}}, socket) do
     all_ids = plan["steps"] |> Enum.map(& &1["id"]) |> MapSet.new()
 
+    agent_types =
+      Map.new(plan["steps"] || [], fn s ->
+        {s["id"], s["agent_type"] || "executor"}
+      end)
+
     {:noreply,
      socket
      |> assign(:plan, plan)
      |> assign(:accepted_steps, all_ids)
      |> assign(:step_configs, %{})
+     |> assign(:step_agent_types, agent_types)
      |> assign(:status, :review_plan)
      |> assign(:planner_stream, "")
      |> assign(:elapsed_seconds, 0)}
@@ -938,6 +970,30 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                 </select>
                               <% end %>
                             </form>
+                            <%!-- Agent type selector --%>
+                            <form
+                              phx-change="update_step_agent_type"
+                              id={"step-agent-#{step["id"]}"}
+                              class="flex items-center gap-2 mt-1.5"
+                            >
+                              <input type="hidden" name="step_id" value={step["id"]} />
+                              <span class="text-xs text-slate-500 shrink-0">Specialist:</span>
+                              <select
+                                name="agent_type"
+                                class="flex-1 bg-slate-900 border border-indigo-700/50 rounded text-xs text-indigo-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              >
+                                <%= for {label, val, icon} <- AgentRegistry.agents() do %>
+                                  <option
+                                    value={val}
+                                    selected={
+                                      Map.get(@step_agent_types, step["id"], "executor") == val
+                                    }
+                                  >
+                                    {icon} {label}
+                                  </option>
+                                <% end %>
+                              </select>
+                            </form>
                           </div>
                         </div>
                       </div>
@@ -1001,6 +1057,9 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         <p class="text-xs font-medium text-slate-300 leading-snug">
                           {step["title"]}
                         </p>
+                        <p class="text-xs text-slate-500 mt-1 truncate">
+                          {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                        </p>
                       </div>
                     <% end %>
                   </div>
@@ -1023,6 +1082,9 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         </div>
                         <p class="text-xs font-medium text-slate-300 leading-snug mb-1.5">
                           {step["title"]}
+                        </p>
+                        <p class="text-xs text-violet-400/70 mb-1 truncate">
+                          {AgentRegistry.label_for(step["agent_type"] || "executor")}
                         </p>
                         <%= if Map.get(@step_streams, step["id"], "") != "" do %>
                           <p class="text-xs text-slate-400 font-mono leading-relaxed line-clamp-3 break-all">
@@ -1056,6 +1118,9 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         <p class="text-xs font-medium text-slate-300 leading-snug">
                           {step["title"]}
                         </p>
+                        <p class="text-xs text-emerald-500/70 mt-1 truncate">
+                          {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                        </p>
                       </button>
                     <% end %>
                   </div>
@@ -1074,6 +1139,9 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         </div>
                         <p class="text-xs font-medium text-slate-300 leading-snug">
                           {step["title"]}
+                        </p>
+                        <p class="text-xs text-red-400/60 truncate">
+                          {AgentRegistry.label_for(step["agent_type"] || "executor")}
                         </p>
                         <%= if reason = Map.get(@step_errors, step["id"]) do %>
                           <p class="text-xs text-red-400/80 font-mono leading-snug bg-red-900/20 rounded px-1.5 py-1 break-all">
