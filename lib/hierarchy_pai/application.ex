@@ -11,8 +11,7 @@ defmodule HierarchyPai.Application do
       HierarchyPaiWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:hierarchy_pai, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: HierarchyPai.PubSub},
-      # Start a worker by calling: HierarchyPai.Worker.start_link(arg)
-      # {HierarchyPai.Worker, arg},
+      HierarchyPai.ProviderStore,
       # Start to serve requests, typically the last entry
       HierarchyPaiWeb.Endpoint
     ]

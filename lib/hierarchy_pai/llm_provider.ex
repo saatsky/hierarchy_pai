@@ -24,6 +24,10 @@ defmodule HierarchyPai.LLMProvider do
 
   @jan_ai_base "http://127.0.0.1:1337"
   @ollama_base "http://127.0.0.1:11434"
+  @github_copilot_endpoint "https://models.github.ai/inference/chat/completions"
+
+  @doc "Returns the GitHub Models inference endpoint URL."
+  def github_copilot_endpoint, do: @github_copilot_endpoint
 
   @doc """
   Returns `true` when running inside WSL2.
@@ -68,13 +72,29 @@ defmodule HierarchyPai.LLMProvider do
     base = Map.get(config, :local_base) || default_local_base(:jan_ai)
     host_header = if needs_host_spoof?(base), do: [{"host", "localhost"}], else: []
 
-    ChatAnthropic.new!(%{
+    ChatOpenAI.new!(%{
       model: config.model,
-      endpoint: "#{base}/v1/messages",
+      endpoint: "#{base}/v1/chat/completions",
       api_key: "not-required",
       receive_timeout: 300_000,
       stream: Map.get(config, :stream, false),
-      req_opts: [retry: false, headers: host_header]
+      req_config: %{retry: false, headers: host_header}
+    })
+  end
+
+  def build(%{provider: :github_copilot} = config) do
+    endpoint = Map.get(config, :endpoint, @github_copilot_endpoint)
+
+    # GitHub Models free tier is heavily rate-limited (10 RPM for gpt-4o).
+    # Use exponential backoff so 429 retries actually wait before re-firing.
+    rate_limit_backoff = fn attempt -> trunc(:math.pow(2, attempt) * 5_000) end
+
+    ChatOpenAI.new!(%{
+      model: config.model,
+      endpoint: endpoint,
+      api_key: config.api_key,
+      stream: Map.get(config, :stream, false),
+      req_config: %{retry: :safe_transient, retry_delay: rate_limit_backoff, max_retries: 3}
     })
   end
 
@@ -205,6 +225,18 @@ defmodule HierarchyPai.LLMProvider do
   @doc "Returns the default models list for cloud providers."
   def default_models(:openai), do: ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
   def default_models(:anthropic), do: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
+
+  def default_models(:github_copilot),
+    do: [
+      "openai/gpt-4o",
+      "openai/gpt-4o-mini",
+      "openai/o3-mini",
+      "anthropic/claude-3-5-sonnet",
+      "anthropic/claude-3-5-haiku",
+      "meta/meta-llama-3.1-405b-instruct",
+      "mistral-ai/mistral-large-2407"
+    ]
+
   def default_models(_), do: []
 
   @doc "Returns whether the provider needs an API key."

@@ -49,6 +49,27 @@ defmodule HierarchyPai.Agents.Planner do
 
   @spec plan(String.t(), map(), String.t()) :: {:ok, map()} | {:error, String.t()}
   def plan(task, provider_config, pubsub_topic) do
+    messages = [
+      Message.new_system!(@system_prompt),
+      Message.new_user!("Task:\n#{task}\n\nReturn JSON only.")
+    ]
+
+    max_retries = Map.get(provider_config, :max_retries, 0)
+
+    case run_with_streaming(messages, provider_config, max_retries, pubsub_topic) do
+      {:ok, updated_chain} ->
+        extract_plan(updated_chain.last_message)
+
+      {:error, _reason} ->
+        # Streaming failed (e.g. provider returned empty body) — retry without streaming
+        case run_without_streaming(messages, provider_config, max_retries) do
+          {:ok, updated_chain} -> extract_plan(updated_chain.last_message)
+          {:error, reason} -> {:error, "Planner LLM error: #{reason}"}
+        end
+    end
+  end
+
+  defp run_with_streaming(messages, provider_config, max_retries, pubsub_topic) do
     model = HierarchyPai.LLMProvider.build(Map.put(provider_config, :stream, true))
 
     callback_handler = %{
@@ -68,25 +89,23 @@ defmodule HierarchyPai.Agents.Planner do
     }
 
     chain =
-      LLMChain.new!(%{
-        llm: model,
-        verbose: false,
-        max_retry_count: Map.get(provider_config, :max_retries, 0)
-      })
+      LLMChain.new!(%{llm: model, verbose: false, max_retry_count: max_retries})
       |> LLMChain.add_callback(callback_handler)
-      |> LLMChain.add_messages([
-        Message.new_system!(@system_prompt),
-        Message.new_user!("Task:\n#{task}\n\nReturn JSON only.")
-      ])
+      |> LLMChain.add_messages(messages)
       |> LLMChain.message_processors([JsonProcessor.new!()])
 
-    case safe_run(chain) do
-      {:ok, updated_chain} ->
-        extract_plan(updated_chain.last_message)
+    safe_run(chain)
+  end
 
-      {:error, reason} ->
-        {:error, "Planner LLM error: #{reason}"}
-    end
+  defp run_without_streaming(messages, provider_config, max_retries) do
+    model = HierarchyPai.LLMProvider.build(Map.put(provider_config, :stream, false))
+
+    chain =
+      LLMChain.new!(%{llm: model, verbose: false, max_retry_count: max_retries})
+      |> LLMChain.add_messages(messages)
+      |> LLMChain.message_processors([JsonProcessor.new!()])
+
+    safe_run(chain)
   end
 
   defp safe_run(chain) do

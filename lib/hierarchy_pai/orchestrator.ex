@@ -63,16 +63,24 @@ defmodule HierarchyPai.Orchestrator do
   end
 
   # Execute only the given step_ids (no aggregation). Used for retrying failed steps.
-  # On success broadcasts {:partial_results_ready, results}.
+  # prior_results: already-completed step results, passed as context to the executor.
+  # On success broadcasts {:partial_results_ready, new_results}.
   # On failure relies on {:step_error} events already broadcast per step.
-  @spec execute_steps(map(), MapSet.t(), map(), map(), String.t()) :: :ok
-  def execute_steps(plan, step_ids, step_configs, default_provider_config, pubsub_topic) do
+  @spec execute_steps(map(), MapSet.t(), map(), map(), String.t(), list()) :: :ok
+  def execute_steps(
+        plan,
+        step_ids,
+        step_configs,
+        default_provider_config,
+        pubsub_topic,
+        prior_results \\ []
+      ) do
     steps =
       (plan["steps"] || [])
       |> Enum.filter(&MapSet.member?(step_ids, &1["id"]))
 
-    case execute_waves(steps, step_configs, default_provider_config, pubsub_topic) do
-      {:ok, results} -> broadcast(pubsub_topic, {:partial_results_ready, results})
+    case execute_waves(steps, step_configs, default_provider_config, pubsub_topic, prior_results) do
+      {:ok, new_results} -> broadcast(pubsub_topic, {:partial_results_ready, new_results})
       {:error, _reason} -> broadcast(pubsub_topic, :wave_failed)
     end
 
@@ -96,8 +104,8 @@ defmodule HierarchyPai.Orchestrator do
 
   # Topological levels: returns [[wave1_steps], [wave2_steps], ...]
   # Steps in the same wave are independent and can run in parallel.
-  defp topological_levels(steps) do
-    build_levels(steps, MapSet.new(), [])
+  defp topological_levels(steps, initial_done) do
+    build_levels(steps, initial_done, [])
   end
 
   defp build_levels([], _done, acc), do: Enum.reverse(acc)
@@ -118,18 +126,28 @@ defmodule HierarchyPai.Orchestrator do
     end
   end
 
-  defp execute_waves(steps, step_configs, default_config, pubsub_topic) do
-    levels = topological_levels(steps)
+  defp execute_waves(steps, step_configs, default_config, pubsub_topic, prior_results \\ []) do
+    already_done = MapSet.new(prior_results, & &1["step_id"])
+    levels = topological_levels(steps, already_done)
 
-    Enum.reduce_while(levels, {:ok, []}, fn wave, {:ok, all_results} ->
+    # Start accumulator with prior_results as context, but track the initial offset
+    # so we return only newly-completed results from this call.
+    Enum.reduce_while(levels, {:ok, prior_results}, fn wave, {:ok, all_results} ->
       case execute_wave(wave, all_results, step_configs, default_config, pubsub_topic) do
         {:ok, wave_results} -> {:cont, {:ok, all_results ++ wave_results}}
         {:error, _} = err -> {:halt, err}
       end
     end)
+    |> case do
+      {:ok, all_results} -> {:ok, Enum.drop(all_results, length(prior_results))}
+      err -> err
+    end
   end
 
   defp execute_wave(steps, completed_results, step_configs, default_config, pubsub_topic) do
+    # Max 2 concurrent requests per wave — prevents rate-limit exhaustion on
+    # providers like GitHub Models (10 RPM for gpt-4o). Independent steps still
+    # run in parallel, just not all at once.
     raw =
       Task.async_stream(
         steps,
@@ -148,7 +166,7 @@ defmodule HierarchyPai.Orchestrator do
           end
         end,
         timeout: :infinity,
-        max_concurrency: System.schedulers_online()
+        max_concurrency: 2
       )
       |> Enum.to_list()
 

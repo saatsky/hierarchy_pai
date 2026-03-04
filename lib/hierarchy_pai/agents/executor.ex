@@ -1,7 +1,8 @@
 defmodule HierarchyPai.Agents.Executor do
   @moduledoc """
   The Executor agent processes a single plan step, streaming tokens to PubSub
-  as they arrive from the LLM. Returns `{:ok, output_string}` or `{:error, reason}`.
+  as they arrive from the LLM. Falls back to non-streaming if the provider
+  returns an empty streaming body. Returns `{:ok, output_string}` or `{:error, reason}`.
   """
 
   alias LangChain.Chains.LLMChain
@@ -9,13 +10,32 @@ defmodule HierarchyPai.Agents.Executor do
 
   alias HierarchyPai.Agents.AgentRegistry
 
+  # Cap each prior step's output to keep the request within model token limits.
+  @max_context_chars_per_step 1500
+
   @spec execute(map(), list(), map(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
   def execute(step, completed_results, provider_config, pubsub_topic) do
-    model = HierarchyPai.LLMProvider.build(Map.put(provider_config, :stream, true))
-
     step_id = step["id"]
     agent_type = step["agent_type"] || "executor"
     system_prompt = AgentRegistry.system_prompt(agent_type)
+    max_retries = Map.get(provider_config, :max_retries, 0)
+    messages = build_messages(step, completed_results, system_prompt)
+
+    case run_with_streaming(messages, provider_config, max_retries, step_id, pubsub_topic) do
+      {:ok, updated_chain} ->
+        {:ok, extract_content(updated_chain.last_message.content)}
+
+      {:error, _reason} ->
+        # Streaming failed (e.g. provider returned empty body) — retry without streaming
+        case run_without_streaming(messages, provider_config, max_retries) do
+          {:ok, updated_chain} -> {:ok, extract_content(updated_chain.last_message.content)}
+          {:error, reason} -> {:error, "Executor LLM error: #{reason}"}
+        end
+    end
+  end
+
+  defp run_with_streaming(messages, provider_config, max_retries, step_id, pubsub_topic) do
+    model = HierarchyPai.LLMProvider.build(Map.put(provider_config, :stream, true))
 
     callback_handler = %{
       on_llm_new_delta: fn _chain, deltas ->
@@ -33,39 +53,57 @@ defmodule HierarchyPai.Agents.Executor do
       end
     }
 
-    user_message = build_user_message(step, completed_results)
+    chain =
+      LLMChain.new!(%{llm: model, verbose: false, max_retry_count: max_retries})
+      |> LLMChain.add_callback(callback_handler)
+      |> LLMChain.add_messages(messages)
+
+    safe_run(chain)
+  end
+
+  defp run_without_streaming(messages, provider_config, max_retries) do
+    model = HierarchyPai.LLMProvider.build(Map.put(provider_config, :stream, false))
 
     chain =
-      LLMChain.new!(%{
-        llm: model,
-        verbose: false,
-        max_retry_count: Map.get(provider_config, :max_retries, 0)
-      })
-      |> LLMChain.add_callback(callback_handler)
-      |> LLMChain.add_messages([
-        Message.new_system!(system_prompt),
-        Message.new_user!(user_message)
-      ])
+      LLMChain.new!(%{llm: model, verbose: false, max_retry_count: max_retries})
+      |> LLMChain.add_messages(messages)
 
-    case safe_run(chain) do
-      {:ok, updated_chain} ->
-        {:ok, extract_content(updated_chain.last_message.content)}
-
-      {:error, reason} ->
-        {:error, "Executor LLM error: #{reason}"}
-    end
+    safe_run(chain)
   end
 
   defp safe_run(chain) do
     case LLMChain.run(chain, mode: :while_needs_response) do
       {:ok, updated_chain} -> {:ok, updated_chain}
       {:ok, updated_chain, _} -> {:ok, updated_chain}
-      {:error, _chain, %{message: msg}} -> {:error, msg}
-      {:error, _chain, reason} -> {:error, inspect(reason)}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:error, _chain, %{message: msg}} -> {:error, friendly_error(msg)}
+      {:error, _chain, reason} -> {:error, friendly_error(inspect(reason))}
+      {:error, reason} -> {:error, friendly_error(inspect(reason))}
     end
   rescue
-    e -> {:error, Exception.message(e)}
+    e -> {:error, friendly_error(Exception.message(e))}
+  end
+
+  # Map known API error patterns to actionable messages.
+  defp friendly_error(msg) when is_binary(msg) do
+    cond do
+      String.contains?(msg, "Too many requests") or String.contains?(msg, "429") ->
+        "Rate limited by provider (HTTP 429). Reduce concurrent steps or switch to a higher-tier model."
+
+      String.contains?(msg, "tokens_limit_reached") or String.contains?(msg, "too large") ->
+        "Request too large for model. Context was truncated but still exceeded the limit."
+
+      true ->
+        msg
+    end
+  end
+
+  defp friendly_error(other), do: inspect(other)
+
+  defp build_messages(step, completed_results, system_prompt) do
+    [
+      Message.new_system!(system_prompt),
+      Message.new_user!(build_user_message(step, completed_results))
+    ]
   end
 
   defp extract_content(content) when is_binary(content), do: content
@@ -92,7 +130,16 @@ defmodule HierarchyPai.Agents.Executor do
   defp build_user_message(step, completed_results) do
     context =
       Enum.map_join(completed_results, "\n\n", fn r ->
-        "### Step #{r["step_id"]}: #{r["title"]}\n#{r["output"]}"
+        output = r["output"] || ""
+
+        truncated =
+          if String.length(output) > @max_context_chars_per_step do
+            String.slice(output, 0, @max_context_chars_per_step) <> "\n...[truncated]"
+          else
+            output
+          end
+
+        "### Step #{r["step_id"]}: #{r["title"]}\n#{truncated}"
       end)
 
     """
