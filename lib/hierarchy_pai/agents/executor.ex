@@ -7,18 +7,15 @@ defmodule HierarchyPai.Agents.Executor do
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
 
-  @system_prompt """
-  You are an Executor Agent.
-  Given a task step and context from previously completed steps, produce a clear and thorough result.
-  Reference prior step outputs when relevant.
-  Be specific, practical, and detailed in your response.
-  """
+  alias HierarchyPai.Agents.AgentRegistry
 
   @spec execute(map(), list(), map(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
   def execute(step, completed_results, provider_config, pubsub_topic) do
     model = HierarchyPai.LLMProvider.build(Map.put(provider_config, :stream, true))
 
     step_id = step["id"]
+    agent_type = step["agent_type"] || "executor"
+    system_prompt = AgentRegistry.system_prompt(agent_type)
 
     callback_handler = %{
       on_llm_new_delta: fn _chain, deltas ->
@@ -46,7 +43,7 @@ defmodule HierarchyPai.Agents.Executor do
       })
       |> LLMChain.add_callback(callback_handler)
       |> LLMChain.add_messages([
-        Message.new_system!(@system_prompt),
+        Message.new_system!(system_prompt),
         Message.new_user!(user_message)
       ])
 
