@@ -9,6 +9,7 @@ defmodule HierarchyPai.Agents.Executor do
   alias LangChain.Message
 
   alias HierarchyPai.Agents.AgentRegistry
+  alias HierarchyPai.SkillStore
 
   # Cap each prior step's output to keep the request within model token limits.
   @max_context_chars_per_step 1500
@@ -17,7 +18,14 @@ defmodule HierarchyPai.Agents.Executor do
   def execute(step, completed_results, provider_config, pubsub_topic) do
     step_id = step["id"]
     agent_type = step["agent_type"] || "executor"
-    system_prompt = AgentRegistry.system_prompt(agent_type)
+    skill_id = step["skill_id"]
+
+    system_prompt =
+      case skill_id && SkillStore.get(skill_id) do
+        %{content: content} when content != "" -> content
+        _ -> AgentRegistry.system_prompt(agent_type)
+      end
+
     max_retries = Map.get(provider_config, :max_retries, 0)
     messages = build_messages(step, completed_results, system_prompt)
 

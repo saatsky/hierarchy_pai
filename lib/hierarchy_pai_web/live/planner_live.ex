@@ -4,6 +4,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
   alias HierarchyPai.LLMProvider
   alias HierarchyPai.Agents.AgentRegistry
   alias HierarchyPai.ProviderStore
+  alias HierarchyPai.SkillStore
 
   @providers [
     {"Jan.ai (local)", :jan_ai},
@@ -52,6 +53,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:step_outputs, %{})
      |> assign(:step_streams, %{})
      |> assign(:step_agent_types, %{})
+     |> assign(:step_skills, %{})
+     |> assign(:saved_skills, SkillStore.list())
+     |> assign(:skills_syncing, false)
+     |> assign(:skills_sync_result, nil)
      |> assign(:selected_step_id, nil)
      |> assign(:current_step_id, nil)
      |> assign(:final_stream, "")
@@ -334,17 +339,22 @@ defmodule HierarchyPaiWeb.PlannerLive do
     accepted_step_ids = socket.assigns.accepted_steps
     plan = socket.assigns.plan
     step_agent_types = socket.assigns.step_agent_types
+    step_skills = socket.assigns.step_skills
     step_configs = socket.assigns.step_configs
     default_config = build_provider_config(socket.assigns)
     resolved_step_configs = resolve_step_configs(step_configs, default_config)
     topic = socket.assigns.pubsub_topic
 
-    # Merge user-selected agent types into each step before execution
+    # Merge user-selected agent types and skills into each step before execution
     plan_with_agents =
       update_in(plan["steps"], fn steps ->
         Enum.map(steps, fn step ->
           agent_type = Map.get(step_agent_types, step["id"], step["agent_type"] || "executor")
-          Map.put(step, "agent_type", agent_type)
+          skill_id = Map.get(step_skills, step["id"])
+
+          step
+          |> Map.put("agent_type", agent_type)
+          |> Map.put("skill_id", skill_id)
         end)
       end)
 
@@ -449,6 +459,29 @@ defmodule HierarchyPaiWeb.PlannerLive do
       ) do
     id = String.to_integer(id_str)
     {:noreply, update(socket, :step_agent_types, &Map.put(&1, id, agent_type))}
+  end
+
+  @impl true
+  def handle_event(
+        "update_step_skill",
+        %{"step_id" => id_str, "skill_id" => skill_id},
+        socket
+      ) do
+    id = String.to_integer(id_str)
+    value = if skill_id == "", do: nil, else: skill_id
+    {:noreply, update(socket, :step_skills, &Map.put(&1, id, value))}
+  end
+
+  @impl true
+  def handle_event("sync_skills", _params, socket) do
+    parent = self()
+
+    Task.start(fn ->
+      result = HierarchyPai.SkillStore.sync_remote()
+      send(parent, {:skills_sync_done, result})
+    end)
+
+    {:noreply, assign(socket, :skills_syncing, true)}
   end
 
   @impl true
@@ -857,6 +890,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:accepted_steps, all_ids)
      |> assign(:step_configs, %{})
      |> assign(:step_agent_types, agent_types)
+     |> assign(:step_skills, %{})
      |> assign(:status, :review_plan)
      |> assign(:planner_stream, "")
      |> assign(:elapsed_seconds, 0)}
@@ -993,6 +1027,28 @@ defmodule HierarchyPaiWeb.PlannerLive do
   end
 
   def handle_info(:tick, socket), do: {:noreply, socket}
+
+  def handle_info({:skills_sync_done, {:ok, 0}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:skills_syncing, false)
+     |> assign(:skills_sync_result, {:ok, "No new skills found — already up to date."})}
+  end
+
+  def handle_info({:skills_sync_done, {:ok, count}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:skills_syncing, false)
+     |> assign(:saved_skills, SkillStore.list())
+     |> assign(:skills_sync_result, {:ok, "#{count} new skill(s) loaded from GitHub."})}
+  end
+
+  def handle_info({:skills_sync_done, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:skills_syncing, false)
+     |> assign(:skills_sync_result, {:error, reason})}
+  end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
 
@@ -1169,7 +1225,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
           </div>
         </header>
 
-        <div class="max-w-3xl mx-auto px-6 py-8 space-y-6">
+        <div class="max-w-6xl mx-auto px-6 py-8 space-y-6">
           <%!-- Error banner --%>
           <%= if @error do %>
             <div class="bg-red-900/30 border border-red-700/50 rounded-xl p-4 flex items-start gap-3">
@@ -1476,6 +1532,31 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                 <% end %>
                               </select>
                             </form>
+                            <%!-- Skill selector --%>
+                            <%= if @saved_skills != [] do %>
+                              <form
+                                phx-change="update_step_skill"
+                                id={"step-skill-#{step["id"]}"}
+                                class="flex items-center gap-2 mt-1.5"
+                              >
+                                <input type="hidden" name="step_id" value={step["id"]} />
+                                <span class="text-xs text-slate-500 shrink-0">Skill:</span>
+                                <select
+                                  name="skill_id"
+                                  class="flex-1 bg-slate-900 border border-teal-700/50 rounded text-xs text-teal-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                >
+                                  <option value="">— default specialist —</option>
+                                  <%= for skill <- @saved_skills do %>
+                                    <option
+                                      value={skill.id}
+                                      selected={Map.get(@step_skills, step["id"]) == skill.id}
+                                    >
+                                      {skill.name}
+                                    </option>
+                                  <% end %>
+                                </select>
+                              </form>
+                            <% end %>
                           </div>
                         </div>
                       </div>
@@ -2227,6 +2308,89 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 </button>
               </div>
             <% end %>
+          </div>
+
+          <%!-- Skills panel --%>
+          <div class="bg-slate-800/40 border border-slate-700/30 rounded-2xl p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <.icon name="hero-academic-cap" class="w-3.5 h-3.5 text-teal-400" /> Agent Skills
+                <%= if @saved_skills != [] do %>
+                  <span class="ml-1 bg-teal-600/30 text-teal-300 text-xs px-1.5 py-0.5 rounded-full">
+                    {length(@saved_skills)}
+                  </span>
+                <% end %>
+              </p>
+              <button
+                phx-click="sync_skills"
+                disabled={@skills_syncing}
+                class="text-xs text-teal-400 hover:text-teal-300 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Check for new skills on GitHub"
+              >
+                <.icon
+                  name={if @skills_syncing, do: "hero-arrow-path", else: "hero-arrow-down-tray"}
+                  class={["w-3 h-3", if(@skills_syncing, do: "animate-spin")]}
+                />
+                {if @skills_syncing, do: "Syncing…", else: "Check for updates"}
+              </button>
+            </div>
+
+            <%!-- Sync result banner --%>
+            <%= if @skills_sync_result do %>
+              <% {kind, msg} = @skills_sync_result %>
+              <div class={[
+                "rounded-lg px-3 py-2 text-xs flex items-start gap-2",
+                if(kind == :ok,
+                  do: "bg-teal-900/30 border border-teal-700/40 text-teal-300",
+                  else: "bg-red-900/30 border border-red-700/40 text-red-300"
+                )
+              ]}>
+                <.icon
+                  name={if(kind == :ok, do: "hero-check-circle", else: "hero-exclamation-circle")}
+                  class="w-3.5 h-3.5 shrink-0 mt-0.5"
+                />
+                {msg}
+              </div>
+            <% end %>
+
+            <%!-- Skill list --%>
+            <%= if @saved_skills == [] do %>
+              <p class="text-xs text-slate-500 text-center py-3">
+                No skills loaded. Click <strong class="text-slate-400">Check for updates</strong>
+                to fetch skills from GitHub.
+              </p>
+            <% else %>
+              <div class="space-y-1">
+                <%= for skill <- @saved_skills do %>
+                  <div class="flex items-start gap-2 py-1.5 border-b border-slate-700/30 last:border-0">
+                    <span class={[
+                      "text-xs px-1.5 py-0.5 rounded font-mono shrink-0 mt-0.5",
+                      case skill.type do
+                        "research" -> "bg-blue-900/40 text-blue-300"
+                        "content" -> "bg-amber-900/40 text-amber-300"
+                        "engineering" -> "bg-purple-900/40 text-purple-300"
+                        _ -> "bg-slate-700/60 text-slate-400"
+                      end
+                    ]}>
+                      {skill.type}
+                    </span>
+                    <div class="flex-1 min-w-0">
+                      <p class="text-xs font-medium text-slate-200 truncate">{skill.name}</p>
+                      <p class="text-xs text-slate-500 truncate">{skill.description}</p>
+                    </div>
+                    <%= if skill[:source] == :remote do %>
+                      <span class="text-xs text-teal-500" title="Synced from GitHub">
+                        <.icon name="hero-cloud-arrow-down" class="w-3 h-3" />
+                      </span>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+
+            <p class="text-xs text-slate-600 leading-relaxed">
+              Skills replace the default specialist prompt for a step. Select a skill per step in the review plan above.
+            </p>
           </div>
 
           <%!-- About card --%>

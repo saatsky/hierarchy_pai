@@ -12,6 +12,7 @@ defmodule HierarchyPai.Application do
       {DNSCluster, query: Application.get_env(:hierarchy_pai, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: HierarchyPai.PubSub},
       HierarchyPai.ProviderStore,
+      HierarchyPai.SkillStore,
       # Start to serve requests, typically the last entry
       HierarchyPaiWeb.Endpoint
     ]
