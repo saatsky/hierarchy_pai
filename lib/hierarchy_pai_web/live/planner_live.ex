@@ -1196,7 +1196,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
       <div class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-slate-100">
         <%!-- Header --%>
         <header class="border-b border-slate-700/50 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-10">
-          <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div class="w-full px-6 py-4 flex items-center justify-between">
             <div class="flex items-center gap-3">
               <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shadow-lg">
                 <.icon name="hero-cpu-chip" class="w-5 h-5 text-white" />
@@ -1225,1215 +1225,1245 @@ defmodule HierarchyPaiWeb.PlannerLive do
           </div>
         </header>
 
-        <div class="max-w-6xl mx-auto px-6 py-8 space-y-6">
-          <%!-- Error banner --%>
-          <%= if @error do %>
-            <div class="bg-red-900/30 border border-red-700/50 rounded-xl p-4 flex items-start gap-3">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-              <p class="text-sm text-red-300">{@error}</p>
-            </div>
-          <% end %>
+        <div class="w-full px-6 py-8">
+          <div class="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-6 items-start">
+            <%!-- ═══ LEFT SIDEBAR ═══ --%>
+            <div class="space-y-4 lg:sticky lg:top-6">
+              <%!-- Task input card --%>
+              <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-5 space-y-4 backdrop-blur-sm">
+                <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                  <.icon name="hero-pencil-square" class="w-4 h-4 text-violet-400" /> Task
+                </h2>
 
-          <%!-- Task input card --%>
-          <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-5 space-y-4 backdrop-blur-sm">
-            <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-              <.icon name="hero-pencil-square" class="w-4 h-4 text-violet-400" /> Task
-            </h2>
+                <textarea
+                  phx-keyup="update_task"
+                  phx-blur="update_task"
+                  name="task"
+                  rows="4"
+                  disabled={@status != :idle}
+                  placeholder="Describe your task or goal in detail&hellip;"
+                  class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent resize-none leading-relaxed disabled:opacity-50 disabled:cursor-not-allowed"
+                >{@task}</textarea>
 
-            <textarea
-              phx-keyup="update_task"
-              phx-blur="update_task"
-              name="task"
-              rows="4"
-              disabled={@status != :idle}
-              placeholder="Describe your task or goal in detail&hellip;"
-              class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent resize-none leading-relaxed disabled:opacity-50 disabled:cursor-not-allowed"
-            >{@task}</textarea>
-
-            <%= if @status == :idle do %>
-              <button
-                id="run-button"
-                phx-click="run"
-                disabled={String.trim(@task) == "" or is_nil(@planner_provider_id)}
-                class="w-full py-2.5 px-4 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-lg shadow-violet-900/30 hover:shadow-violet-800/40"
-              >
-                <.icon name="hero-play" class="w-4 h-4" /> Run Planner
-              </button>
-            <% else %>
-              <div class="flex items-center gap-3">
-                <%= cond do %>
-                  <% @status in [:done, :review_answer] -> %>
-                    <%!-- Pipeline complete — show a redo option instead of spinner/cancel --%>
-                    <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-emerald-600/10 border border-emerald-700/30 text-emerald-400">
-                      <.icon name="hero-check-circle" class="w-4 h-4" />
-                      <span>{if @status == :done, do: "Completed", else: "Review answer"}</span>
-                    </div>
-                    <button
-                      id="redo-button"
-                      phx-click="cancel"
-                      class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-violet-700/50 hover:bg-violet-600/60 border border-violet-600/50 text-violet-300 hover:text-violet-200"
-                    >
-                      <.icon name="hero-arrow-path" class="w-4 h-4" /> Redo task
-                    </button>
-                  <% @status == :step_failed -> %>
-                    <%!-- Action is in the execution board — just show status here --%>
-                    <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-orange-600/10 border border-orange-700/30 text-orange-400">
-                      <.icon name="hero-exclamation-triangle" class="w-4 h-4" />
-                      <span>Action required in board below</span>
-                    </div>
-                    <button
-                      id="cancel-button"
-                      phx-click="cancel"
-                      class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-red-900/50 hover:bg-red-800/60 border border-red-700/50 text-red-300 hover:text-red-200"
-                    >
-                      <.icon name="hero-stop" class="w-4 h-4" /> Cancel
-                    </button>
-                  <% true -> %>
-                    <%!-- Active processing state --%>
-                    <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-slate-700/50 border border-slate-600/50 text-slate-400">
-                      <.icon name="hero-arrow-path" class="w-4 h-4 animate-spin text-violet-400" />
-                      <span>{status_label(@status)}&hellip;</span>
-                    </div>
-                    <button
-                      id="cancel-button"
-                      phx-click="cancel"
-                      class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-red-900/50 hover:bg-red-800/60 border border-red-700/50 text-red-300 hover:text-red-200"
-                    >
-                      <.icon name="hero-stop" class="w-4 h-4" /> Cancel
-                    </button>
+                <%= if @status == :idle do %>
+                  <button
+                    id="run-button"
+                    phx-click="run"
+                    disabled={String.trim(@task) == "" or is_nil(@planner_provider_id)}
+                    class="w-full py-2.5 px-4 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-lg shadow-violet-900/30 hover:shadow-violet-800/40"
+                  >
+                    <.icon name="hero-play" class="w-4 h-4" /> Run Planner
+                  </button>
+                <% else %>
+                  <div class="flex items-center gap-3">
+                    <%= cond do %>
+                      <% @status in [:done, :review_answer] -> %>
+                        <%!-- Pipeline complete — show a redo option instead of spinner/cancel --%>
+                        <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-emerald-600/10 border border-emerald-700/30 text-emerald-400">
+                          <.icon name="hero-check-circle" class="w-4 h-4" />
+                          <span>{if @status == :done, do: "Completed", else: "Review answer"}</span>
+                        </div>
+                        <button
+                          id="redo-button"
+                          phx-click="cancel"
+                          class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-violet-700/50 hover:bg-violet-600/60 border border-violet-600/50 text-violet-300 hover:text-violet-200"
+                        >
+                          <.icon name="hero-arrow-path" class="w-4 h-4" /> Redo task
+                        </button>
+                      <% @status == :step_failed -> %>
+                        <%!-- Action is in the execution board — just show status here --%>
+                        <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-orange-600/10 border border-orange-700/30 text-orange-400">
+                          <.icon name="hero-exclamation-triangle" class="w-4 h-4" />
+                          <span>Action required in board below</span>
+                        </div>
+                        <button
+                          id="cancel-button"
+                          phx-click="cancel"
+                          class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-red-900/50 hover:bg-red-800/60 border border-red-700/50 text-red-300 hover:text-red-200"
+                        >
+                          <.icon name="hero-stop" class="w-4 h-4" /> Cancel
+                        </button>
+                      <% true -> %>
+                        <%!-- Active processing state --%>
+                        <div class="flex-1 py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2 bg-slate-700/50 border border-slate-600/50 text-slate-400">
+                          <.icon name="hero-arrow-path" class="w-4 h-4 animate-spin text-violet-400" />
+                          <span>{status_label(@status)}&hellip;</span>
+                        </div>
+                        <button
+                          id="cancel-button"
+                          phx-click="cancel"
+                          class="py-2.5 px-5 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center gap-2 bg-red-900/50 hover:bg-red-800/60 border border-red-700/50 text-red-300 hover:text-red-200"
+                        >
+                          <.icon name="hero-stop" class="w-4 h-4" /> Cancel
+                        </button>
+                    <% end %>
+                  </div>
                 <% end %>
               </div>
-            <% end %>
-          </div>
 
-          <%!-- Planning spinner --%>
-          <%= if @status == :planning do %>
-            <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-6 space-y-4">
-              <div class="flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                  <div class="w-8 h-8 rounded-lg bg-violet-600/20 flex items-center justify-center">
-                    <.icon name="hero-arrow-path" class="w-4 h-4 text-violet-400 animate-spin" />
+              <%!-- Planner Provider card --%>
+              <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-5 space-y-4 backdrop-blur-sm">
+                <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                  <.icon name="hero-cog-6-tooth" class="w-4 h-4 text-violet-400" /> Planner Provider
+                </h2>
+
+                <%= if @saved_providers == [] do %>
+                  <%!-- Empty state: no providers configured --%>
+                  <div class="rounded-xl border border-dashed border-slate-600 p-5 flex flex-col items-center text-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-violet-600/10 border border-violet-700/30 flex items-center justify-center">
+                      <.icon name="hero-bolt" class="w-5 h-5 text-violet-500" />
+                    </div>
+                    <div>
+                      <p class="text-sm font-medium text-slate-300">No providers yet</p>
+                      <p class="text-xs text-slate-500 mt-0.5">
+                        Add at least one provider to run tasks.
+                      </p>
+                    </div>
+                    <button
+                      phx-click="open_provider_form"
+                      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-colors"
+                    >
+                      <.icon name="hero-plus" class="w-3.5 h-3.5" /> Add Provider
+                    </button>
                   </div>
+                <% else %>
+                  <%!-- Provider dropdown — select which saved provider drives the planner --%>
                   <div>
-                    <p class="text-sm font-semibold text-slate-200">Analysing task&hellip;</p>
-                    <p class="text-xs text-slate-400">Elapsed: {@elapsed_seconds}s</p>
-                  </div>
-                </div>
-                <button
-                  phx-click="cancel"
-                  class="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-900/30 hover:bg-red-800/40 text-red-400 border border-red-700/40 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-              <%= if @planner_stream != "" do %>
-                <div class="bg-slate-900/60 rounded-xl p-4 max-h-64 overflow-y-auto">
-                  <pre class="text-xs text-slate-300 whitespace-pre-wrap font-mono leading-relaxed">{@planner_stream}</pre>
-                </div>
-              <% end %>
-            </div>
-          <% end %>
-
-          <%!-- Plan Review --%>
-          <%= if @status == :review_plan and @plan do %>
-            <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl overflow-hidden backdrop-blur-sm">
-              <div class="px-5 py-4 border-b border-slate-700/50 flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                  <.icon name="hero-clipboard-document-check" class="w-4 h-4 text-violet-400" />
-                  <h2 class="font-semibold text-slate-200">Plan Review</h2>
-                  <span class="text-xs text-slate-400">{length(@plan["steps"] || [])} steps</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  <button
-                    phx-click="cancel"
-                    class="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700/60 hover:bg-red-900/40 border border-slate-600/40 hover:border-red-700/50 text-slate-400 hover:text-red-300 transition-colors flex items-center gap-1.5"
-                  >
-                    <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Cancel plan
-                  </button>
-                  <button
-                    phx-click="reject_all_steps"
-                    class="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-                  >
-                    Reject All
-                  </button>
-                  <button
-                    phx-click="accept_all_steps"
-                    class="px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600/30 hover:bg-violet-600/40 text-violet-300 border border-violet-700/40 transition-colors"
-                  >
-                    Accept All
-                  </button>
-                </div>
-              </div>
-
-              <div class="px-5 py-3 bg-violet-600/10 border-b border-slate-700/30">
-                <p class="text-xs font-medium text-violet-400 uppercase tracking-wider mb-1">
-                  Goal
-                </p>
-                <p class="text-sm text-slate-200">{@plan["goal"]}</p>
-              </div>
-
-              <%= for {wave_num, wave_steps} <- compute_waves(@plan["steps"] || []) do %>
-                <div class="px-5 py-4 border-b border-slate-700/30 last:border-0">
-                  <div class="flex items-center gap-2 mb-3">
-                    <span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-indigo-600/20 text-indigo-400 border border-indigo-700/40">
-                      Wave {wave_num}
-                    </span>
-                    <span class="text-xs text-slate-500">
-                      {length(wave_steps)} step(s) &mdash; run in parallel
-                    </span>
-                  </div>
-                  <div class="space-y-3">
-                    <%= for step <- wave_steps do %>
-                      <% step_cfg = step_config_for(step["id"], @step_configs, @provider, @model) %>
-                      <% accepted = MapSet.member?(@accepted_steps, step["id"]) %>
-                      <div class={[
-                        "rounded-xl p-4 border transition-all duration-150",
-                        if(accepted,
-                          do: "bg-slate-700/40 border-slate-600/50",
-                          else: "bg-slate-800/40 border-slate-700/30 opacity-60"
-                        )
-                      ]}>
-                        <div class="flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            phx-click="toggle_step"
-                            phx-value-step_id={step["id"]}
-                            checked={accepted}
-                            class="mt-1 w-4 h-4 rounded cursor-pointer accent-violet-500"
-                          />
-                          <div class="flex-1 min-w-0">
-                            <div class="flex items-center gap-2 mb-1">
-                              <span class="text-xs font-bold text-violet-400 shrink-0">
-                                #{step["id"]}
-                              </span>
-                              <p class="text-sm font-semibold text-slate-200">{step["title"]}</p>
-                            </div>
-
-                            <%= if (step["depends_on"] || []) != [] do %>
-                              <p class="text-xs text-amber-400/80 mb-1.5">
-                                Requires: {Enum.map_join(
-                                  step["depends_on"] || [],
-                                  ", ",
-                                  &"Step #{&1}"
-                                )}
-                              </p>
-                            <% end %>
-
-                            <details class="mb-2 group">
-                              <summary class="text-xs text-slate-500 cursor-pointer hover:text-slate-400 select-none">
-                                View instruction
-                              </summary>
-                              <p class="text-xs text-slate-400 mt-1.5 leading-relaxed pl-3 border-l border-slate-700">
-                                {step["instruction"]}
-                              </p>
-                            </details>
-
-                            <form
-                              phx-change="update_step_config"
-                              id={"step-cfg-#{step["id"]}"}
-                              class="flex items-center gap-2 flex-wrap"
-                            >
-                              <input type="hidden" name="step_id" value={step["id"]} />
-                              <%= if @saved_providers != [] do %>
-                                <%!-- Saved providers: two dropdowns (provider name + model) --%>
-                                <% saved_id = Map.get(step_cfg, :provider_id) %>
-                                <% active_sp =
-                                  Enum.find(@saved_providers, &(&1.id == saved_id)) ||
-                                    hd(@saved_providers) %>
-                                <select
-                                  name="provider_id"
-                                  class="bg-slate-900 border border-violet-700/50 rounded text-xs text-violet-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                                >
-                                  <%= for sp <- @saved_providers do %>
-                                    <option value={sp.id} selected={sp.id == saved_id}>
-                                      {sp.name}
-                                    </option>
-                                  <% end %>
-                                </select>
-                                <% sp_models = LLMProvider.default_models(active_sp.provider) %>
-                                <%= if sp_models != [] do %>
-                                  <select
-                                    name="model"
-                                    class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                                  >
-                                    <%= for m <- sp_models do %>
-                                      <option
-                                        value={m}
-                                        selected={Map.get(step_cfg, :model, active_sp.model) == m}
-                                      >
-                                        {m}
-                                      </option>
-                                    <% end %>
-                                  </select>
-                                <% else %>
-                                  <input
-                                    type="text"
-                                    name="model"
-                                    value={Map.get(step_cfg, :model, active_sp.model)}
-                                    phx-debounce="300"
-                                    placeholder="model"
-                                    class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder-slate-600"
-                                  />
-                                <% end %>
-                              <% else %>
-                                <%!-- Fallback: raw provider atom + model --%>
-                                <select
-                                  name="provider"
-                                  class="bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                                >
-                                  <%= for {label, val} <- @providers do %>
-                                    <option value={val} selected={step_cfg.provider == val}>
-                                      {label}
-                                    </option>
-                                  <% end %>
-                                </select>
-                                <%= if LLMProvider.local_provider?(step_cfg.provider) or LLMProvider.default_models(step_cfg.provider) == [] do %>
-                                  <input
-                                    type="text"
-                                    name="model"
-                                    value={step_cfg.model}
-                                    phx-debounce="300"
-                                    placeholder="model"
-                                    class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder-slate-600"
-                                  />
-                                <% else %>
-                                  <select
-                                    name="model"
-                                    class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                                  >
-                                    <%= for m <- LLMProvider.default_models(step_cfg.provider) do %>
-                                      <option value={m} selected={step_cfg.model == m}>{m}</option>
-                                    <% end %>
-                                  </select>
-                                <% end %>
-                              <% end %>
-                            </form>
-                            <%!-- Agent type selector --%>
-                            <form
-                              phx-change="update_step_agent_type"
-                              id={"step-agent-#{step["id"]}"}
-                              class="flex items-center gap-2 mt-1.5"
-                            >
-                              <input type="hidden" name="step_id" value={step["id"]} />
-                              <span class="text-xs text-slate-500 shrink-0">Specialist:</span>
-                              <select
-                                name="agent_type"
-                                class="flex-1 bg-slate-900 border border-indigo-700/50 rounded text-xs text-indigo-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              >
-                                <%= for {label, val, icon} <- AgentRegistry.agents() do %>
-                                  <option
-                                    value={val}
-                                    selected={
-                                      Map.get(@step_agent_types, step["id"], "executor") == val
-                                    }
-                                  >
-                                    {icon} {label}
-                                  </option>
-                                <% end %>
-                              </select>
-                            </form>
-                            <%!-- Skill selector --%>
-                            <%= if @saved_skills != [] do %>
-                              <form
-                                phx-change="update_step_skill"
-                                id={"step-skill-#{step["id"]}"}
-                                class="flex items-center gap-2 mt-1.5"
-                              >
-                                <input type="hidden" name="step_id" value={step["id"]} />
-                                <span class="text-xs text-slate-500 shrink-0">Skill:</span>
-                                <select
-                                  name="skill_id"
-                                  class="flex-1 bg-slate-900 border border-teal-700/50 rounded text-xs text-teal-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                                >
-                                  <option value="">— default specialist —</option>
-                                  <%= for skill <- @saved_skills do %>
-                                    <option
-                                      value={skill.id}
-                                      selected={Map.get(@step_skills, step["id"]) == skill.id}
-                                    >
-                                      {skill.name}
-                                    </option>
-                                  <% end %>
-                                </select>
-                              </form>
-                            <% end %>
-                          </div>
-                        </div>
+                    <label class="block text-xs text-slate-400 mb-1.5">
+                      Select provider for planner &amp; aggregator
+                    </label>
+                    <form phx-change="update_planner_provider" id="planner-provider-form">
+                      <select
+                        name="provider_id"
+                        disabled={@status != :idle}
+                        class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <%= for entry <- @saved_providers do %>
+                          <option value={entry.id} selected={@planner_provider_id == entry.id}>
+                            {entry.name} — {entry.model}
+                          </option>
+                        <% end %>
+                      </select>
+                    </form>
+                    <%!-- Selected provider info badge --%>
+                    <%= if entry = Enum.find(@saved_providers, &(&1.id == @planner_provider_id)) do %>
+                      <div class="mt-2 flex items-center gap-2 text-xs text-slate-400">
+                        <span class="px-2 py-0.5 rounded-full bg-slate-700 border border-slate-600 font-mono">
+                          {entry.provider}
+                        </span>
+                        <span class="text-slate-500">·</span>
+                        <span class="truncate">{entry.model}</span>
                       </div>
                     <% end %>
                   </div>
+
+                  <%!-- Max retries --%>
+                  <div>
+                    <label class="block text-xs text-slate-400 mb-1.5">
+                      Chain retries (bad response)
+                    </label>
+                    <select
+                      phx-change="update_max_retries"
+                      name="max_retries"
+                      disabled={@status != :idle}
+                      class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <%= for n <- [0, 1, 2, 3, 5] do %>
+                        <option value={n} selected={@max_retries == n}>{n}</option>
+                      <% end %>
+                    </select>
+                    <p class="mt-1 text-xs text-slate-500">
+                      Re-sends when the LLM returns malformed JSON. Min 1 recommended.
+                    </p>
+                  </div>
+                <% end %>
+              </div>
+
+              <%!-- Saved Providers panel --%>
+              <div class="bg-slate-800/40 border border-slate-700/30 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <.icon name="hero-bookmark" class="w-3.5 h-3.5 text-violet-400" /> Saved Providers
+                    <%= if @saved_providers != [] do %>
+                      <span class="ml-1 bg-violet-600/30 text-violet-300 text-xs px-1.5 py-0.5 rounded-full">
+                        {length(@saved_providers)}
+                      </span>
+                    <% end %>
+                  </p>
+                  <button
+                    phx-click="open_provider_form"
+                    class="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1 transition-colors"
+                  >
+                    <.icon name="hero-plus" class="w-3 h-3" /> Add
+                  </button>
+                </div>
+
+                <%!-- Provider form (add / edit) --%>
+                <%= if @provider_form do %>
+                  <% pf = @provider_form %>
+                  <form
+                    phx-change="provider_form_change"
+                    phx-submit="save_provider_form"
+                    id="saved-provider-form"
+                    class="space-y-2 bg-slate-900/60 rounded-xl p-3 border border-slate-700/50"
+                  >
+                    <p class="text-xs font-medium text-slate-300">
+                      {if pf[:id], do: "Edit provider", else: "New provider"}
+                    </p>
+
+                    <%!-- Name --%>
+                    <input
+                      type="text"
+                      name="saved_provider[name]"
+                      value={pf[:name]}
+                      placeholder="e.g. My Copilot"
+                      class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                    />
+
+                    <%!-- Provider type --%>
+                    <select
+                      name="saved_provider[provider]"
+                      class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                    >
+                      <%= for {label, val} <- @providers do %>
+                        <option value={val} selected={pf[:provider] == val}>{label}</option>
+                      <% end %>
+                    </select>
+
+                    <%!-- Model --%>
+                    <%= if LLMProvider.default_models(pf[:provider] || :openai) != [] do %>
+                      <select
+                        name="saved_provider[model]"
+                        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                      >
+                        <%= for m <- LLMProvider.default_models(pf[:provider] || :openai) do %>
+                          <option value={m} selected={pf[:model] == m}>{m}</option>
+                        <% end %>
+                      </select>
+                    <% else %>
+                      <input
+                        type="text"
+                        name="saved_provider[model]"
+                        value={pf[:model]}
+                        placeholder="model name"
+                        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                      />
+                    <% end %>
+
+                    <%!-- API key (if needed) --%>
+                    <%= if pf[:provider] in [:openai, :anthropic, :github_copilot, :custom] do %>
+                      <input
+                        type="password"
+                        name="saved_provider[api_key]"
+                        value={pf[:api_key]}
+                        placeholder={
+                          case pf[:provider] do
+                            :github_copilot -> "github_pat_..."
+                            :openai -> "sk-..."
+                            :anthropic -> "sk-ant-..."
+                            _ -> "API key (optional)"
+                          end
+                        }
+                        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                      />
+                    <% end %>
+
+                    <%!-- Endpoint (custom only; GitHub Copilot URL is fixed) --%>
+                    <%= if pf[:provider] == :custom do %>
+                      <input
+                        type="text"
+                        name="saved_provider[endpoint]"
+                        value={pf[:endpoint]}
+                        placeholder="https://..."
+                        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                      />
+                    <% end %>
+
+                    <div class="flex gap-2 pt-1">
+                      <button
+                        type="submit"
+                        class="flex-1 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium py-1.5 rounded-lg transition-colors"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        phx-click="cancel_provider_form"
+                        class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-medium py-1.5 rounded-lg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                <% end %>
+
+                <%!-- Saved providers list --%>
+                <%= if @saved_providers == [] and is_nil(@provider_form) do %>
+                  <p class="text-xs text-slate-500 text-center py-2">
+                    No saved providers yet. Add one or save the current config.
+                  </p>
+                <% end %>
+
+                <%= for sp <- @saved_providers do %>
+                  <div class="flex items-center gap-2 py-2 border-b border-slate-700/40 last:border-0">
+                    <div class="flex-1 min-w-0">
+                      <p class="text-xs font-medium text-slate-200 truncate">{sp.name}</p>
+                      <p class="text-xs text-slate-500 truncate">
+                        {sp.model} &middot; {sp.provider}
+                      </p>
+                    </div>
+                    <button
+                      phx-click="edit_saved_provider"
+                      phx-value-id={sp.id}
+                      class="text-slate-500 hover:text-slate-300 transition-colors"
+                      title="Edit"
+                    >
+                      <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      phx-click="delete_saved_provider"
+                      phx-value-id={sp.id}
+                      data-confirm="Delete this saved provider?"
+                      class="text-slate-500 hover:text-red-400 transition-colors"
+                      title="Delete"
+                    >
+                      <.icon name="hero-trash" class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                <% end %>
+              </div>
+
+              <%!-- Skills panel --%>
+              <div class="bg-slate-800/40 border border-slate-700/30 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <.icon name="hero-academic-cap" class="w-3.5 h-3.5 text-teal-400" /> Agent Skills
+                    <%= if @saved_skills != [] do %>
+                      <span class="ml-1 bg-teal-600/30 text-teal-300 text-xs px-1.5 py-0.5 rounded-full">
+                        {length(@saved_skills)}
+                      </span>
+                    <% end %>
+                  </p>
+                  <button
+                    phx-click="sync_skills"
+                    disabled={@skills_syncing}
+                    class="text-xs text-teal-400 hover:text-teal-300 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Check for new skills on GitHub"
+                  >
+                    <.icon
+                      name={if @skills_syncing, do: "hero-arrow-path", else: "hero-arrow-down-tray"}
+                      class={["w-3 h-3", if(@skills_syncing, do: "animate-spin")]}
+                    />
+                    {if @skills_syncing, do: "Syncing…", else: "Check for updates"}
+                  </button>
+                </div>
+
+                <%!-- Sync result banner --%>
+                <%= if @skills_sync_result do %>
+                  <% {kind, msg} = @skills_sync_result %>
+                  <div class={[
+                    "rounded-lg px-3 py-2 text-xs flex items-start gap-2",
+                    if(kind == :ok,
+                      do: "bg-teal-900/30 border border-teal-700/40 text-teal-300",
+                      else: "bg-red-900/30 border border-red-700/40 text-red-300"
+                    )
+                  ]}>
+                    <.icon
+                      name={if(kind == :ok, do: "hero-check-circle", else: "hero-exclamation-circle")}
+                      class="w-3.5 h-3.5 shrink-0 mt-0.5"
+                    />
+                    {msg}
+                  </div>
+                <% end %>
+
+                <%!-- Skill list --%>
+                <%= if @saved_skills == [] do %>
+                  <p class="text-xs text-slate-500 text-center py-3">
+                    No skills loaded. Click <strong class="text-slate-400">Check for updates</strong>
+                    to fetch skills from GitHub.
+                  </p>
+                <% else %>
+                  <div class="space-y-1">
+                    <%= for skill <- @saved_skills do %>
+                      <div class="flex items-start gap-2 py-1.5 border-b border-slate-700/30 last:border-0">
+                        <span class={[
+                          "text-xs px-1.5 py-0.5 rounded font-mono shrink-0 mt-0.5",
+                          case skill.type do
+                            "research" -> "bg-blue-900/40 text-blue-300"
+                            "content" -> "bg-amber-900/40 text-amber-300"
+                            "engineering" -> "bg-purple-900/40 text-purple-300"
+                            _ -> "bg-slate-700/60 text-slate-400"
+                          end
+                        ]}>
+                          {skill.type}
+                        </span>
+                        <div class="flex-1 min-w-0">
+                          <p class="text-xs font-medium text-slate-200 truncate">{skill.name}</p>
+                          <p class="text-xs text-slate-500 truncate">{skill.description}</p>
+                        </div>
+                        <%= if skill[:source] == :remote do %>
+                          <span class="text-xs text-teal-500" title="Synced from GitHub">
+                            <.icon name="hero-cloud-arrow-down" class="w-3 h-3" />
+                          </span>
+                        <% end %>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+
+                <p class="text-xs text-slate-600 leading-relaxed">
+                  Skills replace the default specialist prompt for a step. Select a skill per step in the review plan above.
+                </p>
+              </div>
+
+              <%!-- About card --%>
+              <div class="bg-slate-800/40 border border-slate-700/30 rounded-2xl p-5 text-xs text-slate-500 space-y-2">
+                <p class="font-medium text-slate-400">How it works</p>
+                <div class="space-y-1.5">
+                  <div class="flex items-start gap-2">
+                    <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                      1
+                    </span>
+                    <span>
+                      <strong class="text-slate-300">Planner</strong>
+                      &mdash; decomposes your task into structured steps
+                    </span>
+                  </div>
+                  <div class="flex items-start gap-2">
+                    <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                      2
+                    </span>
+                    <span>
+                      <strong class="text-slate-300">Review</strong>
+                      &mdash; accept/reject steps and pick a model per step
+                    </span>
+                  </div>
+                  <div class="flex items-start gap-2">
+                    <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                      3
+                    </span>
+                    <span>
+                      <strong class="text-slate-300">Executor</strong>
+                      &mdash; runs steps in parallel dependency waves
+                    </span>
+                  </div>
+                  <div class="flex items-start gap-2">
+                    <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                      4
+                    </span>
+                    <span>
+                      <strong class="text-slate-300">Aggregator</strong>
+                      &mdash; synthesizes all outputs into a final answer
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <%!-- /LEFT SIDEBAR --%>
+
+            <%!-- ═══ RIGHT MAIN CONTENT ═══ --%>
+            <div class="space-y-5 min-w-0">
+              <%!-- Error banner --%>
+              <%= if @error do %>
+                <div class="bg-red-900/30 border border-red-700/50 rounded-xl p-4 flex items-start gap-3">
+                  <.icon
+                    name="hero-exclamation-triangle"
+                    class="w-5 h-5 text-red-400 shrink-0 mt-0.5"
+                  />
+                  <p class="text-sm text-red-300">{@error}</p>
                 </div>
               <% end %>
 
-              <div class="px-5 py-4 bg-slate-900/40 border-t border-slate-700/50 flex items-center justify-between">
-                <span class="text-xs text-slate-400">
-                  {MapSet.size(@accepted_steps)} of {length(@plan["steps"] || [])} steps accepted
-                </span>
-                <button
-                  phx-click="start_execution"
-                  disabled={MapSet.size(@accepted_steps) == 0}
-                  class="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                >
-                  <.icon name="hero-play" class="w-4 h-4" />
-                  Run {MapSet.size(@accepted_steps)} accepted steps
-                </button>
-              </div>
-            </div>
-          <% end %>
+              <%!-- Idle placeholder --%>
+              <%= if @status == :idle do %>
+                <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-12 flex flex-col items-center text-center gap-4">
+                  <div class="w-16 h-16 rounded-2xl bg-violet-600/10 border border-violet-700/30 flex items-center justify-center">
+                    <.icon name="hero-cpu-chip" class="w-8 h-8 text-violet-500" />
+                  </div>
+                  <div>
+                    <p class="text-lg font-semibold text-slate-300">Ready to plan</p>
+                    <p class="text-sm text-slate-500 mt-1 max-w-md">
+                      <%= if @saved_providers == [] do %>
+                        Add a provider in the <strong class="text-slate-400">Saved Providers</strong>
+                        panel, then enter a task and click <strong class="text-slate-400">Run Planner</strong>.
+                      <% else %>
+                        Select a provider, enter a task, and click
+                        <strong class="text-slate-400">Run Planner</strong>
+                        to start the multi-agent pipeline.
+                      <% end %>
+                    </p>
+                  </div>
+                </div>
+              <% end %>
 
-          <%!-- Execution Kanban Board --%>
-          <%= if @status in [:executing, :step_failed, :aggregating, :review_answer, :done] and @plan do %>
-            <div class={[
-              "border rounded-2xl overflow-hidden backdrop-blur-sm",
-              cond do
-                @status == :step_failed -> "bg-orange-950/20 border-orange-700/40"
-                @status in [:done, :review_answer] -> "bg-emerald-950/20 border-emerald-700/30"
-                true -> "bg-slate-800/60 border-slate-700/50"
-              end
-            ]}>
-              <div class="px-5 py-4 border-b border-slate-700/50 flex items-center gap-2">
-                <.icon name="hero-squares-2x2" class="w-4 h-4 text-violet-400" />
-                <h2 class="font-semibold text-slate-200">Execution Board</h2>
-                <%= cond do %>
-                  <% @status == :step_failed -> %>
-                    <span class="text-xs px-2 py-0.5 rounded-full bg-orange-600/20 text-orange-400 border border-orange-700/40">
-                      Action required
+              <%!-- Planning spinner --%>
+              <%= if @status == :planning do %>
+                <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-6 space-y-4">
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                      <div class="w-8 h-8 rounded-lg bg-violet-600/20 flex items-center justify-center">
+                        <.icon name="hero-arrow-path" class="w-4 h-4 text-violet-400 animate-spin" />
+                      </div>
+                      <div>
+                        <p class="text-sm font-semibold text-slate-200">Analysing task&hellip;</p>
+                        <p class="text-xs text-slate-400">Elapsed: {@elapsed_seconds}s</p>
+                      </div>
+                    </div>
+                    <button
+                      phx-click="cancel"
+                      class="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-900/30 hover:bg-red-800/40 text-red-400 border border-red-700/40 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <%= if @planner_stream != "" do %>
+                    <div class="bg-slate-900/60 rounded-xl p-4 max-h-64 overflow-y-auto">
+                      <pre class="text-xs text-slate-300 whitespace-pre-wrap font-mono leading-relaxed">{@planner_stream}</pre>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
+
+              <%!-- Plan Review --%>
+              <%= if @status == :review_plan and @plan do %>
+                <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl overflow-hidden backdrop-blur-sm">
+                  <div class="px-5 py-4 border-b border-slate-700/50 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                      <.icon name="hero-clipboard-document-check" class="w-4 h-4 text-violet-400" />
+                      <h2 class="font-semibold text-slate-200">Plan Review</h2>
+                      <span class="text-xs text-slate-400">{length(@plan["steps"] || [])} steps</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <button
+                        phx-click="cancel"
+                        class="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700/60 hover:bg-red-900/40 border border-slate-600/40 hover:border-red-700/50 text-slate-400 hover:text-red-300 transition-colors flex items-center gap-1.5"
+                      >
+                        <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Cancel plan
+                      </button>
+                      <button
+                        phx-click="reject_all_steps"
+                        class="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                      >
+                        Reject All
+                      </button>
+                      <button
+                        phx-click="accept_all_steps"
+                        class="px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600/30 hover:bg-violet-600/40 text-violet-300 border border-violet-700/40 transition-colors"
+                      >
+                        Accept All
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="px-5 py-3 bg-violet-600/10 border-b border-slate-700/30">
+                    <p class="text-xs font-medium text-violet-400 uppercase tracking-wider mb-1">
+                      Goal
+                    </p>
+                    <p class="text-sm text-slate-200">{@plan["goal"]}</p>
+                  </div>
+
+                  <%= for {wave_num, wave_steps} <- compute_waves(@plan["steps"] || []) do %>
+                    <div class="px-5 py-4 border-b border-slate-700/30 last:border-0">
+                      <div class="flex items-center gap-2 mb-3">
+                        <span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-indigo-600/20 text-indigo-400 border border-indigo-700/40">
+                          Wave {wave_num}
+                        </span>
+                        <span class="text-xs text-slate-500">
+                          {length(wave_steps)} step(s) &mdash; run in parallel
+                        </span>
+                      </div>
+                      <div class="space-y-3">
+                        <%= for step <- wave_steps do %>
+                          <% step_cfg = step_config_for(step["id"], @step_configs, @provider, @model) %>
+                          <% accepted = MapSet.member?(@accepted_steps, step["id"]) %>
+                          <div class={[
+                            "rounded-xl p-4 border transition-all duration-150",
+                            if(accepted,
+                              do: "bg-slate-700/40 border-slate-600/50",
+                              else: "bg-slate-800/40 border-slate-700/30 opacity-60"
+                            )
+                          ]}>
+                            <div class="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                phx-click="toggle_step"
+                                phx-value-step_id={step["id"]}
+                                checked={accepted}
+                                class="mt-1 w-4 h-4 rounded cursor-pointer accent-violet-500"
+                              />
+                              <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1">
+                                  <span class="text-xs font-bold text-violet-400 shrink-0">
+                                    #{step["id"]}
+                                  </span>
+                                  <p class="text-sm font-semibold text-slate-200">{step["title"]}</p>
+                                </div>
+
+                                <%= if (step["depends_on"] || []) != [] do %>
+                                  <p class="text-xs text-amber-400/80 mb-1.5">
+                                    Requires: {Enum.map_join(
+                                      step["depends_on"] || [],
+                                      ", ",
+                                      &"Step #{&1}"
+                                    )}
+                                  </p>
+                                <% end %>
+
+                                <details class="mb-2 group">
+                                  <summary class="text-xs text-slate-500 cursor-pointer hover:text-slate-400 select-none">
+                                    View instruction
+                                  </summary>
+                                  <p class="text-xs text-slate-400 mt-1.5 leading-relaxed pl-3 border-l border-slate-700">
+                                    {step["instruction"]}
+                                  </p>
+                                </details>
+
+                                <form
+                                  phx-change="update_step_config"
+                                  id={"step-cfg-#{step["id"]}"}
+                                  class="flex items-center gap-2 flex-wrap"
+                                >
+                                  <input type="hidden" name="step_id" value={step["id"]} />
+                                  <%= if @saved_providers != [] do %>
+                                    <%!-- Saved providers: two dropdowns (provider name + model) --%>
+                                    <% saved_id = Map.get(step_cfg, :provider_id) %>
+                                    <% active_sp =
+                                      Enum.find(@saved_providers, &(&1.id == saved_id)) ||
+                                        hd(@saved_providers) %>
+                                    <select
+                                      name="provider_id"
+                                      class="bg-slate-900 border border-violet-700/50 rounded text-xs text-violet-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                    >
+                                      <%= for sp <- @saved_providers do %>
+                                        <option value={sp.id} selected={sp.id == saved_id}>
+                                          {sp.name}
+                                        </option>
+                                      <% end %>
+                                    </select>
+                                    <% sp_models = LLMProvider.default_models(active_sp.provider) %>
+                                    <%= if sp_models != [] do %>
+                                      <select
+                                        name="model"
+                                        class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                      >
+                                        <%= for m <- sp_models do %>
+                                          <option
+                                            value={m}
+                                            selected={Map.get(step_cfg, :model, active_sp.model) == m}
+                                          >
+                                            {m}
+                                          </option>
+                                        <% end %>
+                                      </select>
+                                    <% else %>
+                                      <input
+                                        type="text"
+                                        name="model"
+                                        value={Map.get(step_cfg, :model, active_sp.model)}
+                                        phx-debounce="300"
+                                        placeholder="model"
+                                        class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder-slate-600"
+                                      />
+                                    <% end %>
+                                  <% else %>
+                                    <%!-- Fallback: raw provider atom + model --%>
+                                    <select
+                                      name="provider"
+                                      class="bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                    >
+                                      <%= for {label, val} <- @providers do %>
+                                        <option value={val} selected={step_cfg.provider == val}>
+                                          {label}
+                                        </option>
+                                      <% end %>
+                                    </select>
+                                    <%= if LLMProvider.local_provider?(step_cfg.provider) or LLMProvider.default_models(step_cfg.provider) == [] do %>
+                                      <input
+                                        type="text"
+                                        name="model"
+                                        value={step_cfg.model}
+                                        phx-debounce="300"
+                                        placeholder="model"
+                                        class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder-slate-600"
+                                      />
+                                    <% else %>
+                                      <select
+                                        name="model"
+                                        class="flex-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                      >
+                                        <%= for m <- LLMProvider.default_models(step_cfg.provider) do %>
+                                          <option value={m} selected={step_cfg.model == m}>
+                                            {m}
+                                          </option>
+                                        <% end %>
+                                      </select>
+                                    <% end %>
+                                  <% end %>
+                                </form>
+                                <%!-- Agent type selector --%>
+                                <form
+                                  phx-change="update_step_agent_type"
+                                  id={"step-agent-#{step["id"]}"}
+                                  class="flex items-center gap-2 mt-1.5"
+                                >
+                                  <input type="hidden" name="step_id" value={step["id"]} />
+                                  <span class="text-xs text-slate-500 shrink-0">Specialist:</span>
+                                  <select
+                                    name="agent_type"
+                                    class="flex-1 bg-slate-900 border border-indigo-700/50 rounded text-xs text-indigo-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                  >
+                                    <%= for {label, val, icon} <- AgentRegistry.agents() do %>
+                                      <option
+                                        value={val}
+                                        selected={
+                                          Map.get(@step_agent_types, step["id"], "executor") == val
+                                        }
+                                      >
+                                        {icon} {label}
+                                      </option>
+                                    <% end %>
+                                  </select>
+                                </form>
+                                <%!-- Skill selector --%>
+                                <%= if @saved_skills != [] do %>
+                                  <form
+                                    phx-change="update_step_skill"
+                                    id={"step-skill-#{step["id"]}"}
+                                    class="flex items-center gap-2 mt-1.5"
+                                  >
+                                    <input type="hidden" name="step_id" value={step["id"]} />
+                                    <span class="text-xs text-slate-500 shrink-0">Skill:</span>
+                                    <select
+                                      name="skill_id"
+                                      class="flex-1 bg-slate-900 border border-teal-700/50 rounded text-xs text-teal-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                    >
+                                      <option value="">— default specialist —</option>
+                                      <%= for skill <- @saved_skills do %>
+                                        <option
+                                          value={skill.id}
+                                          selected={Map.get(@step_skills, step["id"]) == skill.id}
+                                        >
+                                          {skill.name}
+                                        </option>
+                                      <% end %>
+                                    </select>
+                                  </form>
+                                <% end %>
+                              </div>
+                            </div>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+                  <% end %>
+
+                  <div class="px-5 py-4 bg-slate-900/40 border-t border-slate-700/50 flex items-center justify-between">
+                    <span class="text-xs text-slate-400">
+                      {MapSet.size(@accepted_steps)} of {length(@plan["steps"] || [])} steps accepted
                     </span>
-                  <% @status in [:done, :review_answer] -> %>
-                    <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-600/20 text-emerald-400 border border-emerald-700/40">
-                      Completed — click any done step to redo
-                    </span>
-                  <% true -> %>
-                <% end %>
-                <span class="ml-auto text-xs text-slate-500">{@elapsed_seconds}s</span>
-                <%= if @status == :executing do %>
+                    <button
+                      phx-click="start_execution"
+                      disabled={MapSet.size(@accepted_steps) == 0}
+                      class="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                    >
+                      <.icon name="hero-play" class="w-4 h-4" />
+                      Run {MapSet.size(@accepted_steps)} accepted steps
+                    </button>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Execution Kanban Board --%>
+              <%= if @status in [:executing, :step_failed, :aggregating, :review_answer, :done] and @plan do %>
+                <div class={[
+                  "border rounded-2xl overflow-hidden backdrop-blur-sm",
+                  cond do
+                    @status == :step_failed -> "bg-orange-950/20 border-orange-700/40"
+                    @status in [:done, :review_answer] -> "bg-emerald-950/20 border-emerald-700/30"
+                    true -> "bg-slate-800/60 border-slate-700/50"
+                  end
+                ]}>
+                  <div class="px-5 py-4 border-b border-slate-700/50 flex items-center gap-2">
+                    <.icon name="hero-squares-2x2" class="w-4 h-4 text-violet-400" />
+                    <h2 class="font-semibold text-slate-200">Execution Board</h2>
+                    <%= cond do %>
+                      <% @status == :step_failed -> %>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-orange-600/20 text-orange-400 border border-orange-700/40">
+                          Action required
+                        </span>
+                      <% @status in [:done, :review_answer] -> %>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-600/20 text-emerald-400 border border-emerald-700/40">
+                          Completed — click any done step to redo
+                        </span>
+                      <% true -> %>
+                    <% end %>
+                    <span class="ml-auto text-xs text-slate-500">{@elapsed_seconds}s</span>
+                    <%= if @status == :executing do %>
+                      <button
+                        phx-click="cancel"
+                        class="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700/60 hover:bg-red-900/40 border border-slate-600/40 hover:border-red-700/50 text-slate-400 hover:text-red-300 transition-colors flex items-center gap-1.5"
+                      >
+                        <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Cancel
+                      </button>
+                    <% end %>
+                  </div>
+                  <div class="p-5 grid grid-cols-4 gap-4">
+                    <div>
+                      <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-slate-500 shrink-0"></span> Queue
+                      </h3>
+                      <div class="space-y-2">
+                        <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :pending) do %>
+                          <div class="bg-slate-700/40 border border-slate-600/40 rounded-lg p-3">
+                            <p class="text-xs font-bold text-slate-400 mb-0.5">#{step["id"]}</p>
+                            <p class="text-xs font-medium text-slate-300 leading-snug">
+                              {step["title"]}
+                            </p>
+                            <p class="text-xs text-slate-500 mt-1 truncate">
+                              {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                            </p>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 class="text-xs font-semibold text-violet-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-violet-500 animate-pulse shrink-0">
+                        </span>
+                        Running
+                      </h3>
+                      <div class="space-y-2">
+                        <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :running) do %>
+                          <div class="bg-violet-600/10 border border-violet-700/40 rounded-lg p-3">
+                            <div class="flex items-center gap-1.5 mb-1">
+                              <.icon
+                                name="hero-arrow-path"
+                                class="w-3 h-3 text-violet-400 animate-spin"
+                              />
+                              <p class="text-xs font-bold text-violet-400">#{step["id"]}</p>
+                            </div>
+                            <p class="text-xs font-medium text-slate-300 leading-snug mb-1.5">
+                              {step["title"]}
+                            </p>
+                            <p class="text-xs text-violet-400/70 mb-1 truncate">
+                              {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                            </p>
+                            <%= if Map.get(@step_streams, step["id"], "") != "" do %>
+                              <p class="text-xs text-slate-400 font-mono leading-relaxed line-clamp-3 break-all">
+                                {String.slice(Map.get(@step_streams, step["id"], ""), 0, 200)}
+                              </p>
+                            <% end %>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 class="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span> Done
+                      </h3>
+                      <div class="space-y-2">
+                        <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :done) do %>
+                          <% empty_output? = Map.get(@step_outputs, step["id"], "") == "" %>
+                          <div class={[
+                            "border rounded-lg p-3",
+                            if(empty_output?,
+                              do: "bg-amber-900/10 border-amber-700/40",
+                              else: "bg-emerald-600/10 border-emerald-700/40"
+                            )
+                          ]}>
+                            <div class="flex items-center gap-1.5 mb-1">
+                              <%= if empty_output? do %>
+                                <.icon
+                                  name="hero-exclamation-triangle"
+                                  class="w-3 h-3 text-amber-400"
+                                />
+                                <p class="text-xs font-bold text-amber-400">#{step["id"]}</p>
+                                <span class="ml-auto text-xs text-amber-500/80 font-medium">
+                                  empty
+                                </span>
+                              <% else %>
+                                <.icon name="hero-check-circle" class="w-3 h-3 text-emerald-400" />
+                                <p class="text-xs font-bold text-emerald-400">#{step["id"]}</p>
+                              <% end %>
+                            </div>
+                            <p class="text-xs font-medium text-slate-300 leading-snug">
+                              {step["title"]}
+                            </p>
+                            <p class={[
+                              "text-xs mt-1 truncate",
+                              if(empty_output?, do: "text-amber-500/60", else: "text-emerald-500/70")
+                            ]}>
+                              {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                            </p>
+                            <div class="flex items-center gap-1.5 mt-2">
+                              <button
+                                phx-click="view_step_output"
+                                phx-value-step_id={step["id"]}
+                                class="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md bg-slate-700/60 hover:bg-slate-600/60 text-slate-400 hover:text-slate-200 text-xs transition-colors"
+                              >
+                                <.icon name="hero-eye" class="w-3 h-3" /> View
+                              </button>
+                              <button
+                                phx-click="request_redo_step"
+                                phx-value-step_id={step["id"]}
+                                class={[
+                                  "flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
+                                  if(empty_output?,
+                                    do:
+                                      "bg-amber-700/40 hover:bg-amber-600/50 text-amber-300 hover:text-amber-200",
+                                    else:
+                                      "bg-violet-700/40 hover:bg-violet-600/50 text-violet-300 hover:text-violet-200"
+                                  )
+                                ]}
+                              >
+                                <.icon name="hero-arrow-path" class="w-3 h-3" /> Redo
+                              </button>
+                            </div>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 class="text-xs font-semibold text-red-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-red-500 shrink-0"></span> Failed
+                      </h3>
+                      <div class="space-y-2">
+                        <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :error) do %>
+                          <div class="bg-red-600/10 border border-red-700/40 rounded-lg p-3 space-y-1.5">
+                            <div class="flex items-center gap-1.5">
+                              <.icon name="hero-x-circle" class="w-3 h-3 text-red-400 shrink-0" />
+                              <p class="text-xs font-bold text-red-400">#{step["id"]}</p>
+                            </div>
+                            <p class="text-xs font-medium text-slate-300 leading-snug">
+                              {step["title"]}
+                            </p>
+                            <p class="text-xs text-red-400/60 truncate">
+                              {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                            </p>
+                            <%= if reason = Map.get(@step_errors, step["id"]) do %>
+                              <p class="text-xs text-red-400/80 font-mono leading-snug bg-red-900/20 rounded px-1.5 py-1 break-all">
+                                {reason}
+                              </p>
+                            <% end %>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+                  </div>
+                  <%!-- Action panel shown when wave has failed steps --%>
+                  <%= if @status == :step_failed do %>
+                    <div class="px-5 py-4 border-t border-orange-700/30 bg-orange-950/20 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                      <div class="flex-1">
+                        <p class="text-sm font-semibold text-orange-300">One or more steps failed</p>
+                        <p class="text-xs text-slate-400 mt-0.5">
+                          Retry the failed steps, skip them and aggregate what succeeded, or cancel.
+                        </p>
+                      </div>
+                      <div class="flex items-center gap-2 shrink-0">
+                        <button
+                          phx-click="retry_failed_steps"
+                          class="px-4 py-2 text-xs font-semibold rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center gap-1.5"
+                        >
+                          <.icon name="hero-arrow-path" class="w-3.5 h-3.5" /> Retry failed
+                        </button>
+                        <button
+                          phx-click="skip_and_aggregate"
+                          disabled={@step_results == []}
+                          class="px-4 py-2 text-xs font-semibold rounded-lg bg-indigo-600/70 hover:bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
+                        >
+                          <.icon name="hero-forward" class="w-3.5 h-3.5" /> Skip &amp; aggregate
+                        </button>
+                        <button
+                          phx-click="cancel"
+                          class="px-4 py-2 text-xs font-semibold rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors flex items-center gap-1.5"
+                        >
+                          <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Cancel
+                        </button>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
+
+              <%!-- Step output modal --%>
+              <%= if @selected_step_id do %>
+                <% sel_step = Enum.find(@plan["steps"] || [], &(&1["id"] == @selected_step_id)) %>
+                <% sel_output = Map.get(@step_outputs, @selected_step_id, "") %>
+                <div
+                  id="step-output-modal"
+                  class="fixed inset-0 z-50 flex items-center justify-center p-4"
+                  phx-window-keydown="close_step_output"
+                  phx-key="Escape"
+                >
+                  <%!-- Backdrop --%>
+                  <div
+                    class="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
+                    phx-click="close_step_output"
+                  >
+                  </div>
+                  <%!-- Panel --%>
+                  <div class="relative z-10 w-full max-w-2xl max-h-[80vh] flex flex-col bg-slate-800 border border-slate-600/50 rounded-2xl shadow-2xl shadow-black/50 overflow-hidden">
+                    <div class="flex items-start justify-between px-5 py-4 border-b border-slate-700/50 shrink-0">
+                      <div class="flex items-center gap-2">
+                        <.icon name="hero-check-circle" class="w-4 h-4 text-emerald-400" />
+                        <span class="text-xs font-bold text-emerald-400">
+                          {if sel_step, do: "##{sel_step["id"]}", else: "##{@selected_step_id}"}
+                        </span>
+                        <h3 class="font-semibold text-slate-200 text-sm">
+                          {if sel_step, do: sel_step["title"], else: "Step output"}
+                        </h3>
+                      </div>
+                      <button
+                        phx-click="close_step_output"
+                        class="text-slate-400 hover:text-slate-200 transition-colors ml-4 shrink-0"
+                      >
+                        <.icon name="hero-x-mark" class="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div class="flex-1 overflow-y-auto p-5">
+                      <%= if sel_output == "" do %>
+                        <div class="flex flex-col items-center gap-3 py-4 text-center">
+                          <.icon name="hero-exclamation-triangle" class="w-8 h-8 text-amber-400" />
+                          <p class="text-sm font-medium text-amber-300">
+                            This step produced no output
+                          </p>
+                          <p class="text-xs text-slate-500 max-w-xs">
+                            The LLM returned an empty response. This step passed nothing to dependent steps.
+                            Redo it to get a proper result.
+                          </p>
+                        </div>
+                      <% else %>
+                        <pre class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed font-sans">{sel_output}</pre>
+                      <% end %>
+                    </div>
+                    <div class="px-5 py-3 border-t border-slate-700/50 flex items-center justify-between shrink-0">
+                      <button
+                        phx-click="request_redo_step"
+                        phx-value-step_id={@selected_step_id}
+                        class={[
+                          "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                          if(sel_output == "",
+                            do:
+                              "bg-amber-700/50 hover:bg-amber-600/60 text-amber-300 border border-amber-600/40",
+                            else:
+                              "bg-violet-700/40 hover:bg-violet-600/50 text-violet-300 border border-violet-600/40"
+                          )
+                        ]}
+                      >
+                        <.icon name="hero-arrow-path" class="w-3.5 h-3.5" />
+                        {if sel_output == "", do: "Redo (empty output)", else: "Redo this step"}
+                      </button>
+                      <span class="text-xs text-slate-500">
+                        {if sel_output != "", do: "Output passed to dependent steps & aggregator."}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Redo step confirmation modal --%>
+              <%= if @redo_confirm do %>
+                <% redo_step = Enum.find(@plan["steps"] || [], &(&1["id"] == @redo_confirm.step_id)) %>
+                <% also_steps =
+                  Enum.filter(@plan["steps"] || [], &(&1["id"] in @redo_confirm.also_ids)) %>
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                  <div class="bg-slate-800 border border-violet-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                    <div class="px-6 py-5 border-b border-slate-700/50 flex items-center gap-3">
+                      <div class="w-8 h-8 rounded-lg bg-violet-600/20 flex items-center justify-center">
+                        <.icon name="hero-arrow-path" class="w-4 h-4 text-violet-400" />
+                      </div>
+                      <h3 class="font-semibold text-slate-200">Redo step?</h3>
+                      <button
+                        phx-click="cancel_redo_confirm"
+                        class="ml-auto text-slate-500 hover:text-slate-300 transition-colors"
+                      >
+                        <.icon name="hero-x-mark" class="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div class="p-6 space-y-4">
+                      <p class="text-sm text-slate-300">
+                        You are about to re-run:
+                      </p>
+                      <div class="bg-violet-900/20 border border-violet-700/40 rounded-lg p-3">
+                        <p class="text-xs font-bold text-violet-400 mb-0.5">
+                          #{redo_step && redo_step["id"]}
+                        </p>
+                        <p class="text-sm font-medium text-slate-200">
+                          {redo_step && redo_step["title"]}
+                        </p>
+                      </div>
+                      <%= if also_steps != [] do %>
+                        <div class="space-y-2">
+                          <p class="text-xs text-amber-400 flex items-center gap-1.5">
+                            <.icon name="hero-exclamation-triangle" class="w-3.5 h-3.5" />
+                            The following dependent steps will also be re-run:
+                          </p>
+                          <div class="space-y-1.5">
+                            <%= for s <- also_steps do %>
+                              <div class="bg-amber-900/15 border border-amber-700/30 rounded-lg px-3 py-2 flex items-center gap-2">
+                                <.icon
+                                  name="hero-arrow-right"
+                                  class="w-3 h-3 text-amber-500 shrink-0"
+                                />
+                                <p class="text-xs text-slate-300">
+                                  <span class="font-bold text-amber-400">#{s["id"]}</span>
+                                  — {s["title"]}
+                                </p>
+                              </div>
+                            <% end %>
+                          </div>
+                        </div>
+                      <% end %>
+                      <p class="text-xs text-slate-500">
+                        The final answer will be re-generated once all re-run steps complete.
+                      </p>
+                    </div>
+                    <div class="px-6 py-4 border-t border-slate-700/50 flex items-center gap-3 justify-end">
+                      <button
+                        phx-click="cancel_redo_confirm"
+                        class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-700/60 hover:bg-slate-600/60 text-slate-300 border border-slate-600/40 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        phx-click="confirm_redo_step"
+                        class="px-5 py-2 rounded-xl text-sm font-semibold bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center gap-2"
+                      >
+                        <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Redo
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Aggregating indicator --%>
+              <%= if @status == :aggregating and @final_stream == "" do %>
+                <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-6 flex items-center gap-4 backdrop-blur-sm">
+                  <div class="w-10 h-10 rounded-xl bg-indigo-600/20 flex items-center justify-center shrink-0">
+                    <.icon name="hero-arrow-path" class="w-5 h-5 text-indigo-400 animate-spin" />
+                  </div>
+                  <div class="flex-1">
+                    <p class="font-semibold text-slate-200">Synthesising results&hellip;</p>
+                    <p class="text-sm text-slate-400">
+                      The Aggregator agent is writing your final answer
+                    </p>
+                  </div>
                   <button
                     phx-click="cancel"
                     class="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700/60 hover:bg-red-900/40 border border-slate-600/40 hover:border-red-700/50 text-slate-400 hover:text-red-300 transition-colors flex items-center gap-1.5"
                   >
                     <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Cancel
                   </button>
-                <% end %>
-              </div>
-              <div class="p-5 grid grid-cols-4 gap-4">
-                <div>
-                  <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                    <span class="w-2 h-2 rounded-full bg-slate-500 shrink-0"></span> Queue
-                  </h3>
-                  <div class="space-y-2">
-                    <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :pending) do %>
-                      <div class="bg-slate-700/40 border border-slate-600/40 rounded-lg p-3">
-                        <p class="text-xs font-bold text-slate-400 mb-0.5">#{step["id"]}</p>
-                        <p class="text-xs font-medium text-slate-300 leading-snug">
-                          {step["title"]}
-                        </p>
-                        <p class="text-xs text-slate-500 mt-1 truncate">
-                          {AgentRegistry.label_for(step["agent_type"] || "executor")}
-                        </p>
-                      </div>
-                    <% end %>
-                  </div>
                 </div>
+              <% end %>
 
-                <div>
-                  <h3 class="text-xs font-semibold text-violet-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                    <span class="w-2 h-2 rounded-full bg-violet-500 animate-pulse shrink-0"></span>
-                    Running
-                  </h3>
-                  <div class="space-y-2">
-                    <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :running) do %>
-                      <div class="bg-violet-600/10 border border-violet-700/40 rounded-lg p-3">
-                        <div class="flex items-center gap-1.5 mb-1">
-                          <.icon
-                            name="hero-arrow-path"
-                            class="w-3 h-3 text-violet-400 animate-spin"
-                          />
-                          <p class="text-xs font-bold text-violet-400">#{step["id"]}</p>
-                        </div>
-                        <p class="text-xs font-medium text-slate-300 leading-snug mb-1.5">
-                          {step["title"]}
-                        </p>
-                        <p class="text-xs text-violet-400/70 mb-1 truncate">
-                          {AgentRegistry.label_for(step["agent_type"] || "executor")}
-                        </p>
-                        <%= if Map.get(@step_streams, step["id"], "") != "" do %>
-                          <p class="text-xs text-slate-400 font-mono leading-relaxed line-clamp-3 break-all">
-                            {String.slice(Map.get(@step_streams, step["id"], ""), 0, 200)}
-                          </p>
-                        <% end %>
-                      </div>
-                    <% end %>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 class="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                    <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span> Done
-                  </h3>
-                  <div class="space-y-2">
-                    <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :done) do %>
-                      <% empty_output? = Map.get(@step_outputs, step["id"], "") == "" %>
-                      <div class={[
-                        "border rounded-lg p-3",
-                        if(empty_output?,
-                          do: "bg-amber-900/10 border-amber-700/40",
-                          else: "bg-emerald-600/10 border-emerald-700/40"
-                        )
-                      ]}>
-                        <div class="flex items-center gap-1.5 mb-1">
-                          <%= if empty_output? do %>
-                            <.icon name="hero-exclamation-triangle" class="w-3 h-3 text-amber-400" />
-                            <p class="text-xs font-bold text-amber-400">#{step["id"]}</p>
-                            <span class="ml-auto text-xs text-amber-500/80 font-medium">empty</span>
-                          <% else %>
-                            <.icon name="hero-check-circle" class="w-3 h-3 text-emerald-400" />
-                            <p class="text-xs font-bold text-emerald-400">#{step["id"]}</p>
-                          <% end %>
-                        </div>
-                        <p class="text-xs font-medium text-slate-300 leading-snug">
-                          {step["title"]}
-                        </p>
-                        <p class={[
-                          "text-xs mt-1 truncate",
-                          if(empty_output?, do: "text-amber-500/60", else: "text-emerald-500/70")
-                        ]}>
-                          {AgentRegistry.label_for(step["agent_type"] || "executor")}
-                        </p>
-                        <div class="flex items-center gap-1.5 mt-2">
-                          <button
-                            phx-click="view_step_output"
-                            phx-value-step_id={step["id"]}
-                            class="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md bg-slate-700/60 hover:bg-slate-600/60 text-slate-400 hover:text-slate-200 text-xs transition-colors"
-                          >
-                            <.icon name="hero-eye" class="w-3 h-3" /> View
-                          </button>
-                          <button
-                            phx-click="request_redo_step"
-                            phx-value-step_id={step["id"]}
-                            class={[
-                              "flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
-                              if(empty_output?,
-                                do:
-                                  "bg-amber-700/40 hover:bg-amber-600/50 text-amber-300 hover:text-amber-200",
-                                else:
-                                  "bg-violet-700/40 hover:bg-violet-600/50 text-violet-300 hover:text-violet-200"
-                              )
-                            ]}
-                          >
-                            <.icon name="hero-arrow-path" class="w-3 h-3" /> Redo
-                          </button>
-                        </div>
-                      </div>
-                    <% end %>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 class="text-xs font-semibold text-red-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                    <span class="w-2 h-2 rounded-full bg-red-500 shrink-0"></span> Failed
-                  </h3>
-                  <div class="space-y-2">
-                    <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :error) do %>
-                      <div class="bg-red-600/10 border border-red-700/40 rounded-lg p-3 space-y-1.5">
-                        <div class="flex items-center gap-1.5">
-                          <.icon name="hero-x-circle" class="w-3 h-3 text-red-400 shrink-0" />
-                          <p class="text-xs font-bold text-red-400">#{step["id"]}</p>
-                        </div>
-                        <p class="text-xs font-medium text-slate-300 leading-snug">
-                          {step["title"]}
-                        </p>
-                        <p class="text-xs text-red-400/60 truncate">
-                          {AgentRegistry.label_for(step["agent_type"] || "executor")}
-                        </p>
-                        <%= if reason = Map.get(@step_errors, step["id"]) do %>
-                          <p class="text-xs text-red-400/80 font-mono leading-snug bg-red-900/20 rounded px-1.5 py-1 break-all">
-                            {reason}
-                          </p>
-                        <% end %>
-                      </div>
-                    <% end %>
-                  </div>
-                </div>
-              </div>
-              <%!-- Action panel shown when wave has failed steps --%>
-              <%= if @status == :step_failed do %>
-                <div class="px-5 py-4 border-t border-orange-700/30 bg-orange-950/20 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                  <div class="flex-1">
-                    <p class="text-sm font-semibold text-orange-300">One or more steps failed</p>
-                    <p class="text-xs text-slate-400 mt-0.5">
-                      Retry the failed steps, skip them and aggregate what succeeded, or cancel.
-                    </p>
-                  </div>
-                  <div class="flex items-center gap-2 shrink-0">
-                    <button
-                      phx-click="retry_failed_steps"
-                      class="px-4 py-2 text-xs font-semibold rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center gap-1.5"
-                    >
-                      <.icon name="hero-arrow-path" class="w-3.5 h-3.5" /> Retry failed
-                    </button>
-                    <button
-                      phx-click="skip_and_aggregate"
-                      disabled={@step_results == []}
-                      class="px-4 py-2 text-xs font-semibold rounded-lg bg-indigo-600/70 hover:bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
-                    >
-                      <.icon name="hero-forward" class="w-3.5 h-3.5" /> Skip &amp; aggregate
-                    </button>
+              <%!-- Aggregating streaming preview --%>
+              <%= if @status == :aggregating and @final_stream != "" do %>
+                <div class="bg-slate-800/60 border border-indigo-700/40 rounded-2xl overflow-hidden backdrop-blur-sm">
+                  <div class="px-5 py-4 border-b border-indigo-700/30 bg-indigo-600/10 flex items-center gap-2">
+                    <.icon name="hero-sparkles" class="w-4 h-4 text-indigo-400 animate-pulse" />
+                    <h2 class="font-semibold text-slate-200">Synthesising&hellip;</h2>
                     <button
                       phx-click="cancel"
-                      class="px-4 py-2 text-xs font-semibold rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors flex items-center gap-1.5"
+                      class="ml-auto px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700/60 hover:bg-red-900/40 border border-slate-600/40 hover:border-red-700/50 text-slate-400 hover:text-red-300 transition-colors flex items-center gap-1.5"
                     >
                       <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Cancel
                     </button>
                   </div>
+                  <div class="p-5">
+                    <div class="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
+                      {@final_stream}
+                      <span class="inline-block w-2 h-3.5 bg-indigo-400 ml-0.5 animate-pulse rounded-sm">
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Review Answer --%>
+              <%= if @status == :review_answer and @final_answer do %>
+                <div class="bg-slate-800/60 border border-indigo-700/40 rounded-2xl overflow-hidden backdrop-blur-sm shadow-lg shadow-indigo-900/10">
+                  <div class="px-5 py-4 border-b border-indigo-700/30 bg-indigo-600/10 flex items-center gap-2">
+                    <.icon name="hero-sparkles" class="w-4 h-4 text-indigo-400" />
+                    <h2 class="font-semibold text-slate-200">Final Answer</h2>
+                    <span class="ml-auto text-xs text-slate-400">Review before accepting</span>
+                  </div>
+                  <div class="p-5 space-y-4">
+                    <div class="max-h-96 overflow-y-auto bg-slate-900/60 rounded-xl p-4">
+                      <pre class="text-sm text-slate-200 whitespace-pre-wrap font-sans leading-relaxed">{@final_answer}</pre>
+                    </div>
+                    <div class="flex gap-3 flex-wrap">
+                      <button
+                        phx-click="accept_answer"
+                        class="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+                      >
+                        <.icon name="hero-check" class="w-4 h-4" /> Accept
+                      </button>
+                      <button
+                        phx-click="regenerate_answer"
+                        class="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 transition-colors"
+                      >
+                        <.icon name="hero-arrow-path" class="w-4 h-4" /> Re-generate
+                      </button>
+                      <div class="ml-auto flex gap-2">
+                        <button
+                          phx-click="download_answer"
+                          class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
+                          title="Download final answer as Markdown"
+                        >
+                          <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Answer
+                        </button>
+                        <button
+                          phx-click="download_full_report"
+                          class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
+                          title="Download all step outputs + final answer as Markdown"
+                        >
+                          <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Full report
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Done: accepted final answer --%>
+              <%= if @status == :done and @final_answer do %>
+                <div class="bg-slate-800/60 border border-emerald-700/40 rounded-2xl overflow-hidden backdrop-blur-sm shadow-lg shadow-emerald-900/10">
+                  <div class="px-5 py-4 border-b border-emerald-700/30 bg-emerald-600/10 flex items-center gap-2">
+                    <.icon name="hero-check-badge" class="w-4 h-4 text-emerald-400" />
+                    <h2 class="font-semibold text-slate-200">Final Answer</h2>
+                    <span class="ml-auto text-xs px-2 py-0.5 rounded-full bg-emerald-600/20 text-emerald-400 font-medium border border-emerald-700/40">
+                      Accepted
+                    </span>
+                  </div>
+                  <div class="p-5">
+                    <div class="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap prose prose-invert prose-sm max-w-none">
+                      {@final_answer}
+                    </div>
+                    <div class="flex gap-2 mt-4">
+                      <button
+                        phx-click="download_answer"
+                        class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
+                        title="Download final answer as Markdown"
+                      >
+                        <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Download answer
+                      </button>
+                      <button
+                        phx-click="download_full_report"
+                        class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
+                        title="Download all step outputs + final answer as Markdown"
+                      >
+                        <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Download full report
+                      </button>
+                    </div>
+                  </div>
                 </div>
               <% end %>
             </div>
-          <% end %>
-
-          <%!-- Step output modal --%>
-          <%= if @selected_step_id do %>
-            <% sel_step = Enum.find(@plan["steps"] || [], &(&1["id"] == @selected_step_id)) %>
-            <% sel_output = Map.get(@step_outputs, @selected_step_id, "") %>
-            <div
-              id="step-output-modal"
-              class="fixed inset-0 z-50 flex items-center justify-center p-4"
-              phx-window-keydown="close_step_output"
-              phx-key="Escape"
-            >
-              <%!-- Backdrop --%>
-              <div
-                class="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
-                phx-click="close_step_output"
-              >
-              </div>
-              <%!-- Panel --%>
-              <div class="relative z-10 w-full max-w-2xl max-h-[80vh] flex flex-col bg-slate-800 border border-slate-600/50 rounded-2xl shadow-2xl shadow-black/50 overflow-hidden">
-                <div class="flex items-start justify-between px-5 py-4 border-b border-slate-700/50 shrink-0">
-                  <div class="flex items-center gap-2">
-                    <.icon name="hero-check-circle" class="w-4 h-4 text-emerald-400" />
-                    <span class="text-xs font-bold text-emerald-400">
-                      {if sel_step, do: "##{sel_step["id"]}", else: "##{@selected_step_id}"}
-                    </span>
-                    <h3 class="font-semibold text-slate-200 text-sm">
-                      {if sel_step, do: sel_step["title"], else: "Step output"}
-                    </h3>
-                  </div>
-                  <button
-                    phx-click="close_step_output"
-                    class="text-slate-400 hover:text-slate-200 transition-colors ml-4 shrink-0"
-                  >
-                    <.icon name="hero-x-mark" class="w-5 h-5" />
-                  </button>
-                </div>
-                <div class="flex-1 overflow-y-auto p-5">
-                  <%= if sel_output == "" do %>
-                    <div class="flex flex-col items-center gap-3 py-4 text-center">
-                      <.icon name="hero-exclamation-triangle" class="w-8 h-8 text-amber-400" />
-                      <p class="text-sm font-medium text-amber-300">This step produced no output</p>
-                      <p class="text-xs text-slate-500 max-w-xs">
-                        The LLM returned an empty response. This step passed nothing to dependent steps.
-                        Redo it to get a proper result.
-                      </p>
-                    </div>
-                  <% else %>
-                    <pre class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed font-sans">{sel_output}</pre>
-                  <% end %>
-                </div>
-                <div class="px-5 py-3 border-t border-slate-700/50 flex items-center justify-between shrink-0">
-                  <button
-                    phx-click="request_redo_step"
-                    phx-value-step_id={@selected_step_id}
-                    class={[
-                      "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
-                      if(sel_output == "",
-                        do:
-                          "bg-amber-700/50 hover:bg-amber-600/60 text-amber-300 border border-amber-600/40",
-                        else:
-                          "bg-violet-700/40 hover:bg-violet-600/50 text-violet-300 border border-violet-600/40"
-                      )
-                    ]}
-                  >
-                    <.icon name="hero-arrow-path" class="w-3.5 h-3.5" />
-                    {if sel_output == "", do: "Redo (empty output)", else: "Redo this step"}
-                  </button>
-                  <span class="text-xs text-slate-500">
-                    {if sel_output != "", do: "Output passed to dependent steps & aggregator."}
-                  </span>
-                </div>
-              </div>
-            </div>
-          <% end %>
-
-          <%!-- Redo step confirmation modal --%>
-          <%= if @redo_confirm do %>
-            <% redo_step = Enum.find(@plan["steps"] || [], &(&1["id"] == @redo_confirm.step_id)) %>
-            <% also_steps = Enum.filter(@plan["steps"] || [], &(&1["id"] in @redo_confirm.also_ids)) %>
-            <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-              <div class="bg-slate-800 border border-violet-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
-                <div class="px-6 py-5 border-b border-slate-700/50 flex items-center gap-3">
-                  <div class="w-8 h-8 rounded-lg bg-violet-600/20 flex items-center justify-center">
-                    <.icon name="hero-arrow-path" class="w-4 h-4 text-violet-400" />
-                  </div>
-                  <h3 class="font-semibold text-slate-200">Redo step?</h3>
-                  <button
-                    phx-click="cancel_redo_confirm"
-                    class="ml-auto text-slate-500 hover:text-slate-300 transition-colors"
-                  >
-                    <.icon name="hero-x-mark" class="w-5 h-5" />
-                  </button>
-                </div>
-                <div class="p-6 space-y-4">
-                  <p class="text-sm text-slate-300">
-                    You are about to re-run:
-                  </p>
-                  <div class="bg-violet-900/20 border border-violet-700/40 rounded-lg p-3">
-                    <p class="text-xs font-bold text-violet-400 mb-0.5">
-                      #{redo_step && redo_step["id"]}
-                    </p>
-                    <p class="text-sm font-medium text-slate-200">
-                      {redo_step && redo_step["title"]}
-                    </p>
-                  </div>
-                  <%= if also_steps != [] do %>
-                    <div class="space-y-2">
-                      <p class="text-xs text-amber-400 flex items-center gap-1.5">
-                        <.icon name="hero-exclamation-triangle" class="w-3.5 h-3.5" />
-                        The following dependent steps will also be re-run:
-                      </p>
-                      <div class="space-y-1.5">
-                        <%= for s <- also_steps do %>
-                          <div class="bg-amber-900/15 border border-amber-700/30 rounded-lg px-3 py-2 flex items-center gap-2">
-                            <.icon name="hero-arrow-right" class="w-3 h-3 text-amber-500 shrink-0" />
-                            <p class="text-xs text-slate-300">
-                              <span class="font-bold text-amber-400">#{s["id"]}</span> — {s["title"]}
-                            </p>
-                          </div>
-                        <% end %>
-                      </div>
-                    </div>
-                  <% end %>
-                  <p class="text-xs text-slate-500">
-                    The final answer will be re-generated once all re-run steps complete.
-                  </p>
-                </div>
-                <div class="px-6 py-4 border-t border-slate-700/50 flex items-center gap-3 justify-end">
-                  <button
-                    phx-click="cancel_redo_confirm"
-                    class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-700/60 hover:bg-slate-600/60 text-slate-300 border border-slate-600/40 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    phx-click="confirm_redo_step"
-                    class="px-5 py-2 rounded-xl text-sm font-semibold bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center gap-2"
-                  >
-                    <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Redo
-                  </button>
-                </div>
-              </div>
-            </div>
-          <% end %>
-
-          <%!-- Aggregating indicator --%>
-          <%= if @status == :aggregating and @final_stream == "" do %>
-            <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-6 flex items-center gap-4 backdrop-blur-sm">
-              <div class="w-10 h-10 rounded-xl bg-indigo-600/20 flex items-center justify-center shrink-0">
-                <.icon name="hero-arrow-path" class="w-5 h-5 text-indigo-400 animate-spin" />
-              </div>
-              <div class="flex-1">
-                <p class="font-semibold text-slate-200">Synthesising results&hellip;</p>
-                <p class="text-sm text-slate-400">
-                  The Aggregator agent is writing your final answer
-                </p>
-              </div>
-              <button
-                phx-click="cancel"
-                class="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700/60 hover:bg-red-900/40 border border-slate-600/40 hover:border-red-700/50 text-slate-400 hover:text-red-300 transition-colors flex items-center gap-1.5"
-              >
-                <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Cancel
-              </button>
-            </div>
-          <% end %>
-
-          <%!-- Aggregating streaming preview --%>
-          <%= if @status == :aggregating and @final_stream != "" do %>
-            <div class="bg-slate-800/60 border border-indigo-700/40 rounded-2xl overflow-hidden backdrop-blur-sm">
-              <div class="px-5 py-4 border-b border-indigo-700/30 bg-indigo-600/10 flex items-center gap-2">
-                <.icon name="hero-sparkles" class="w-4 h-4 text-indigo-400 animate-pulse" />
-                <h2 class="font-semibold text-slate-200">Synthesising&hellip;</h2>
-                <button
-                  phx-click="cancel"
-                  class="ml-auto px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700/60 hover:bg-red-900/40 border border-slate-600/40 hover:border-red-700/50 text-slate-400 hover:text-red-300 transition-colors flex items-center gap-1.5"
-                >
-                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Cancel
-                </button>
-              </div>
-              <div class="p-5">
-                <div class="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-                  {@final_stream}
-                  <span class="inline-block w-2 h-3.5 bg-indigo-400 ml-0.5 animate-pulse rounded-sm">
-                  </span>
-                </div>
-              </div>
-            </div>
-          <% end %>
-
-          <%!-- Review Answer --%>
-          <%= if @status == :review_answer and @final_answer do %>
-            <div class="bg-slate-800/60 border border-indigo-700/40 rounded-2xl overflow-hidden backdrop-blur-sm shadow-lg shadow-indigo-900/10">
-              <div class="px-5 py-4 border-b border-indigo-700/30 bg-indigo-600/10 flex items-center gap-2">
-                <.icon name="hero-sparkles" class="w-4 h-4 text-indigo-400" />
-                <h2 class="font-semibold text-slate-200">Final Answer</h2>
-                <span class="ml-auto text-xs text-slate-400">Review before accepting</span>
-              </div>
-              <div class="p-5 space-y-4">
-                <div class="max-h-96 overflow-y-auto bg-slate-900/60 rounded-xl p-4">
-                  <pre class="text-sm text-slate-200 whitespace-pre-wrap font-sans leading-relaxed">{@final_answer}</pre>
-                </div>
-                <div class="flex gap-3 flex-wrap">
-                  <button
-                    phx-click="accept_answer"
-                    class="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
-                  >
-                    <.icon name="hero-check" class="w-4 h-4" /> Accept
-                  </button>
-                  <button
-                    phx-click="regenerate_answer"
-                    class="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 transition-colors"
-                  >
-                    <.icon name="hero-arrow-path" class="w-4 h-4" /> Re-generate
-                  </button>
-                  <div class="ml-auto flex gap-2">
-                    <button
-                      phx-click="download_answer"
-                      class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
-                      title="Download final answer as Markdown"
-                    >
-                      <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Answer
-                    </button>
-                    <button
-                      phx-click="download_full_report"
-                      class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
-                      title="Download all step outputs + final answer as Markdown"
-                    >
-                      <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Full report
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          <% end %>
-
-          <%!-- Done: accepted final answer --%>
-          <%= if @status == :done and @final_answer do %>
-            <div class="bg-slate-800/60 border border-emerald-700/40 rounded-2xl overflow-hidden backdrop-blur-sm shadow-lg shadow-emerald-900/10">
-              <div class="px-5 py-4 border-b border-emerald-700/30 bg-emerald-600/10 flex items-center gap-2">
-                <.icon name="hero-check-badge" class="w-4 h-4 text-emerald-400" />
-                <h2 class="font-semibold text-slate-200">Final Answer</h2>
-                <span class="ml-auto text-xs px-2 py-0.5 rounded-full bg-emerald-600/20 text-emerald-400 font-medium border border-emerald-700/40">
-                  Accepted
-                </span>
-              </div>
-              <div class="p-5">
-                <div class="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap prose prose-invert prose-sm max-w-none">
-                  {@final_answer}
-                </div>
-                <div class="flex gap-2 mt-4">
-                  <button
-                    phx-click="download_answer"
-                    class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
-                    title="Download final answer as Markdown"
-                  >
-                    <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Download answer
-                  </button>
-                  <button
-                    phx-click="download_full_report"
-                    class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm bg-slate-700/60 hover:bg-slate-600/70 text-slate-300 border border-slate-600/40 transition-colors"
-                    title="Download all step outputs + final answer as Markdown"
-                  >
-                    <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Download full report
-                  </button>
-                </div>
-              </div>
-            </div>
-          <% end %>
-
-          <%!-- Idle placeholder --%>
-          <%= if @status == :idle do %>
-            <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-12 flex flex-col items-center text-center gap-4">
-              <div class="w-16 h-16 rounded-2xl bg-violet-600/10 border border-violet-700/30 flex items-center justify-center">
-                <.icon name="hero-cpu-chip" class="w-8 h-8 text-violet-500" />
-              </div>
-              <div>
-                <p class="text-lg font-semibold text-slate-300">Ready to plan</p>
-                <p class="text-sm text-slate-500 mt-1 max-w-md">
-                  <%= if @saved_providers == [] do %>
-                    Add a provider in the <strong class="text-slate-400">Saved Providers</strong>
-                    panel, then enter a task and click <strong class="text-slate-400">Run Planner</strong>.
-                  <% else %>
-                    Select a provider, enter a task, and click
-                    <strong class="text-slate-400">Run Planner</strong>
-                    to start the multi-agent pipeline.
-                  <% end %>
-                </p>
-              </div>
-            </div>
-          <% end %>
-          <div class="bg-slate-800/60 border border-slate-700/50 rounded-2xl p-5 space-y-4 backdrop-blur-sm">
-            <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-              <.icon name="hero-cog-6-tooth" class="w-4 h-4 text-violet-400" /> Planner Provider
-            </h2>
-
-            <%= if @saved_providers == [] do %>
-              <%!-- Empty state: no providers configured --%>
-              <div class="rounded-xl border border-dashed border-slate-600 p-5 flex flex-col items-center text-center gap-3">
-                <div class="w-10 h-10 rounded-xl bg-violet-600/10 border border-violet-700/30 flex items-center justify-center">
-                  <.icon name="hero-bolt" class="w-5 h-5 text-violet-500" />
-                </div>
-                <div>
-                  <p class="text-sm font-medium text-slate-300">No providers yet</p>
-                  <p class="text-xs text-slate-500 mt-0.5">
-                    Add at least one provider to run tasks.
-                  </p>
-                </div>
-                <button
-                  phx-click="open_provider_form"
-                  class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-colors"
-                >
-                  <.icon name="hero-plus" class="w-3.5 h-3.5" /> Add Provider
-                </button>
-              </div>
-            <% else %>
-              <%!-- Provider dropdown — select which saved provider drives the planner --%>
-              <div>
-                <label class="block text-xs text-slate-400 mb-1.5">
-                  Select provider for planner &amp; aggregator
-                </label>
-                <form phx-change="update_planner_provider" id="planner-provider-form">
-                  <select
-                    name="provider_id"
-                    disabled={@status != :idle}
-                    class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <%= for entry <- @saved_providers do %>
-                      <option value={entry.id} selected={@planner_provider_id == entry.id}>
-                        {entry.name} — {entry.model}
-                      </option>
-                    <% end %>
-                  </select>
-                </form>
-                <%!-- Selected provider info badge --%>
-                <%= if entry = Enum.find(@saved_providers, &(&1.id == @planner_provider_id)) do %>
-                  <div class="mt-2 flex items-center gap-2 text-xs text-slate-400">
-                    <span class="px-2 py-0.5 rounded-full bg-slate-700 border border-slate-600 font-mono">
-                      {entry.provider}
-                    </span>
-                    <span class="text-slate-500">·</span>
-                    <span class="truncate">{entry.model}</span>
-                  </div>
-                <% end %>
-              </div>
-
-              <%!-- Max retries --%>
-              <div>
-                <label class="block text-xs text-slate-400 mb-1.5">
-                  Chain retries (bad response)
-                </label>
-                <select
-                  phx-change="update_max_retries"
-                  name="max_retries"
-                  disabled={@status != :idle}
-                  class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <%= for n <- [0, 1, 2, 3, 5] do %>
-                    <option value={n} selected={@max_retries == n}>{n}</option>
-                  <% end %>
-                </select>
-                <p class="mt-1 text-xs text-slate-500">
-                  Re-sends when the LLM returns malformed JSON. Min 1 recommended.
-                </p>
-              </div>
-            <% end %>
-          </div>
-
-          <%!-- Saved Providers panel --%>
-          <div class="bg-slate-800/40 border border-slate-700/30 rounded-2xl p-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <p class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                <.icon name="hero-bookmark" class="w-3.5 h-3.5 text-violet-400" /> Saved Providers
-                <%= if @saved_providers != [] do %>
-                  <span class="ml-1 bg-violet-600/30 text-violet-300 text-xs px-1.5 py-0.5 rounded-full">
-                    {length(@saved_providers)}
-                  </span>
-                <% end %>
-              </p>
-              <button
-                phx-click="open_provider_form"
-                class="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1 transition-colors"
-              >
-                <.icon name="hero-plus" class="w-3 h-3" /> Add
-              </button>
-            </div>
-
-            <%!-- Provider form (add / edit) --%>
-            <%= if @provider_form do %>
-              <% pf = @provider_form %>
-              <form
-                phx-change="provider_form_change"
-                phx-submit="save_provider_form"
-                id="saved-provider-form"
-                class="space-y-2 bg-slate-900/60 rounded-xl p-3 border border-slate-700/50"
-              >
-                <p class="text-xs font-medium text-slate-300">
-                  {if pf[:id], do: "Edit provider", else: "New provider"}
-                </p>
-
-                <%!-- Name --%>
-                <input
-                  type="text"
-                  name="saved_provider[name]"
-                  value={pf[:name]}
-                  placeholder="e.g. My Copilot"
-                  class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                />
-
-                <%!-- Provider type --%>
-                <select
-                  name="saved_provider[provider]"
-                  class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                >
-                  <%= for {label, val} <- @providers do %>
-                    <option value={val} selected={pf[:provider] == val}>{label}</option>
-                  <% end %>
-                </select>
-
-                <%!-- Model --%>
-                <%= if LLMProvider.default_models(pf[:provider] || :openai) != [] do %>
-                  <select
-                    name="saved_provider[model]"
-                    class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                  >
-                    <%= for m <- LLMProvider.default_models(pf[:provider] || :openai) do %>
-                      <option value={m} selected={pf[:model] == m}>{m}</option>
-                    <% end %>
-                  </select>
-                <% else %>
-                  <input
-                    type="text"
-                    name="saved_provider[model]"
-                    value={pf[:model]}
-                    placeholder="model name"
-                    class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                  />
-                <% end %>
-
-                <%!-- API key (if needed) --%>
-                <%= if pf[:provider] in [:openai, :anthropic, :github_copilot, :custom] do %>
-                  <input
-                    type="password"
-                    name="saved_provider[api_key]"
-                    value={pf[:api_key]}
-                    placeholder={
-                      case pf[:provider] do
-                        :github_copilot -> "github_pat_..."
-                        :openai -> "sk-..."
-                        :anthropic -> "sk-ant-..."
-                        _ -> "API key (optional)"
-                      end
-                    }
-                    class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                  />
-                <% end %>
-
-                <%!-- Endpoint (custom only; GitHub Copilot URL is fixed) --%>
-                <%= if pf[:provider] == :custom do %>
-                  <input
-                    type="text"
-                    name="saved_provider[endpoint]"
-                    value={pf[:endpoint]}
-                    placeholder="https://..."
-                    class="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                  />
-                <% end %>
-
-                <div class="flex gap-2 pt-1">
-                  <button
-                    type="submit"
-                    class="flex-1 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium py-1.5 rounded-lg transition-colors"
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    phx-click="cancel_provider_form"
-                    class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-medium py-1.5 rounded-lg transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            <% end %>
-
-            <%!-- Saved providers list --%>
-            <%= if @saved_providers == [] and is_nil(@provider_form) do %>
-              <p class="text-xs text-slate-500 text-center py-2">
-                No saved providers yet. Add one or save the current config.
-              </p>
-            <% end %>
-
-            <%= for sp <- @saved_providers do %>
-              <div class="flex items-center gap-2 py-2 border-b border-slate-700/40 last:border-0">
-                <div class="flex-1 min-w-0">
-                  <p class="text-xs font-medium text-slate-200 truncate">{sp.name}</p>
-                  <p class="text-xs text-slate-500 truncate">
-                    {sp.model} &middot; {sp.provider}
-                  </p>
-                </div>
-                <button
-                  phx-click="edit_saved_provider"
-                  phx-value-id={sp.id}
-                  class="text-slate-500 hover:text-slate-300 transition-colors"
-                  title="Edit"
-                >
-                  <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
-                </button>
-                <button
-                  phx-click="delete_saved_provider"
-                  phx-value-id={sp.id}
-                  data-confirm="Delete this saved provider?"
-                  class="text-slate-500 hover:text-red-400 transition-colors"
-                  title="Delete"
-                >
-                  <.icon name="hero-trash" class="w-3.5 h-3.5" />
-                </button>
-              </div>
-            <% end %>
-          </div>
-
-          <%!-- Skills panel --%>
-          <div class="bg-slate-800/40 border border-slate-700/30 rounded-2xl p-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <p class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                <.icon name="hero-academic-cap" class="w-3.5 h-3.5 text-teal-400" /> Agent Skills
-                <%= if @saved_skills != [] do %>
-                  <span class="ml-1 bg-teal-600/30 text-teal-300 text-xs px-1.5 py-0.5 rounded-full">
-                    {length(@saved_skills)}
-                  </span>
-                <% end %>
-              </p>
-              <button
-                phx-click="sync_skills"
-                disabled={@skills_syncing}
-                class="text-xs text-teal-400 hover:text-teal-300 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Check for new skills on GitHub"
-              >
-                <.icon
-                  name={if @skills_syncing, do: "hero-arrow-path", else: "hero-arrow-down-tray"}
-                  class={["w-3 h-3", if(@skills_syncing, do: "animate-spin")]}
-                />
-                {if @skills_syncing, do: "Syncing…", else: "Check for updates"}
-              </button>
-            </div>
-
-            <%!-- Sync result banner --%>
-            <%= if @skills_sync_result do %>
-              <% {kind, msg} = @skills_sync_result %>
-              <div class={[
-                "rounded-lg px-3 py-2 text-xs flex items-start gap-2",
-                if(kind == :ok,
-                  do: "bg-teal-900/30 border border-teal-700/40 text-teal-300",
-                  else: "bg-red-900/30 border border-red-700/40 text-red-300"
-                )
-              ]}>
-                <.icon
-                  name={if(kind == :ok, do: "hero-check-circle", else: "hero-exclamation-circle")}
-                  class="w-3.5 h-3.5 shrink-0 mt-0.5"
-                />
-                {msg}
-              </div>
-            <% end %>
-
-            <%!-- Skill list --%>
-            <%= if @saved_skills == [] do %>
-              <p class="text-xs text-slate-500 text-center py-3">
-                No skills loaded. Click <strong class="text-slate-400">Check for updates</strong>
-                to fetch skills from GitHub.
-              </p>
-            <% else %>
-              <div class="space-y-1">
-                <%= for skill <- @saved_skills do %>
-                  <div class="flex items-start gap-2 py-1.5 border-b border-slate-700/30 last:border-0">
-                    <span class={[
-                      "text-xs px-1.5 py-0.5 rounded font-mono shrink-0 mt-0.5",
-                      case skill.type do
-                        "research" -> "bg-blue-900/40 text-blue-300"
-                        "content" -> "bg-amber-900/40 text-amber-300"
-                        "engineering" -> "bg-purple-900/40 text-purple-300"
-                        _ -> "bg-slate-700/60 text-slate-400"
-                      end
-                    ]}>
-                      {skill.type}
-                    </span>
-                    <div class="flex-1 min-w-0">
-                      <p class="text-xs font-medium text-slate-200 truncate">{skill.name}</p>
-                      <p class="text-xs text-slate-500 truncate">{skill.description}</p>
-                    </div>
-                    <%= if skill[:source] == :remote do %>
-                      <span class="text-xs text-teal-500" title="Synced from GitHub">
-                        <.icon name="hero-cloud-arrow-down" class="w-3 h-3" />
-                      </span>
-                    <% end %>
-                  </div>
-                <% end %>
-              </div>
-            <% end %>
-
-            <p class="text-xs text-slate-600 leading-relaxed">
-              Skills replace the default specialist prompt for a step. Select a skill per step in the review plan above.
-            </p>
-          </div>
-
-          <%!-- About card --%>
-          <div class="bg-slate-800/40 border border-slate-700/30 rounded-2xl p-5 text-xs text-slate-500 space-y-2">
-            <p class="font-medium text-slate-400">How it works</p>
-            <div class="space-y-1.5">
-              <div class="flex items-start gap-2">
-                <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
-                  1
-                </span>
-                <span>
-                  <strong class="text-slate-300">Planner</strong>
-                  &mdash; decomposes your task into structured steps
-                </span>
-              </div>
-              <div class="flex items-start gap-2">
-                <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
-                  2
-                </span>
-                <span>
-                  <strong class="text-slate-300">Review</strong>
-                  &mdash; accept/reject steps and pick a model per step
-                </span>
-              </div>
-              <div class="flex items-start gap-2">
-                <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
-                  3
-                </span>
-                <span>
-                  <strong class="text-slate-300">Executor</strong>
-                  &mdash; runs steps in parallel dependency waves
-                </span>
-              </div>
-              <div class="flex items-start gap-2">
-                <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
-                  4
-                </span>
-                <span>
-                  <strong class="text-slate-300">Aggregator</strong>
-                  &mdash; synthesizes all outputs into a final answer
-                </span>
-              </div>
-            </div>
+            <%!-- /RIGHT MAIN CONTENT --%>
           </div>
         </div>
       </div>
