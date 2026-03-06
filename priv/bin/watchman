@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stub to satisfy Tailwind v4's optional watchman check.
+# Tailwind uses watchman for file watching if available; falls back to inotify/FSEvents.
+# This stub prevents the "watchman: not found" noise without requiring system installation.
+echo "20250101.000000.0"

@@ -1206,13 +1206,23 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <p class="text-xs text-slate-400">Multi-agent reasoning pipeline</p>
               </div>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-3">
               <span class={[
                 "px-2.5 py-1 rounded-full text-xs font-medium",
                 status_badge_class(@status)
               ]}>
                 {status_label(@status)}
               </span>
+              <a
+                href="https://github.com/saatsky/hierarchy_pai"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700/60 border border-slate-700/50 transition-colors"
+                title="View on GitHub"
+              >
+                <.icon name="hero-code-bracket" class="w-3.5 h-3.5" /> GitHub
+              </a>
+              <Layouts.theme_toggle />
               <%= if @status in [:done, :error, :review_answer, :step_failed] do %>
                 <button
                   phx-click="reset"
