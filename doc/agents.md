@@ -183,3 +183,47 @@ The agent registry lives in `lib/hierarchy_pai/agents/agent_registry.ex`. To add
 3. The new agent will automatically appear in the Planner's schema, the review dropdown, and the execution board
 
 No other changes required.
+
+> **Prefer Skills over custom specialists** when you need a specific methodology or output format — they require no code changes and can be shared with the community via pull request. See [Agent Skills](skills.md).
+
+---
+
+## Combining Specialists and Skills
+
+Specialists and Skills are complementary layers:
+
+| Layer | Controls | Defined in |
+|---|---|---|
+| **Specialist** | Reasoning persona — *how* the agent thinks | `AgentRegistry` (code) |
+| **Skill** | Domain methodology — *what* framework to apply | `priv/skills/<id>/SKILL.md` (file) |
+
+When a skill is assigned to a step, the skill's body **replaces** the specialist system prompt for that LLM call. The specialist name and icon still appear on the execution board card for reference, but the LLM receives the skill prompt instead.
+
+### When to use a Skill vs just the Specialist
+
+**Use only the Specialist when:**
+- The task is broad enough that the specialist's general persona is sufficient
+- No specific output format or methodology is required
+- You want the model to interpret the step freely
+
+**Assign a Skill when:**
+- You need a specific documented framework applied (e.g. Amazon PR, JTBD analysis)
+- The output must follow a precise structure (sections, word limits, format)
+- You want reproducible, comparable outputs across redo runs
+
+### Assigning at review time
+
+Each step card in the **Review Plan** section shows a **Skill** dropdown below the Specialist selector. Select `— default specialist —` to use only the specialist's system prompt, or choose a skill to override it.
+
+### Assigning at redo time
+
+Clicking **Redo** on a completed step opens a dialog with **Override for this redo** — both Specialist and Skill can be changed before confirming. This lets you run the same step twice with different prompts to compare outputs without re-running the full pipeline.
+
+### Example combinations
+
+| Specialist | Skill | Use case |
+|---|---|---|
+| Content Creator | `press-release` | Announce a product in Amazon working-backwards style |
+| Trend Researcher | `discovery-process` | Facilitate a structured discovery session |
+| Feedback Synthesizer | `jobs-to-be-done` | Map customer jobs with opportunity scores |
+| Sprint Prioritizer | `epic-breakdown` | Decompose an epic into INVEST-compliant user stories |

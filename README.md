@@ -10,12 +10,15 @@ Hierarchical Planner AI decomposes a complex task into parallel, dependency-awar
 
 - **Hierarchical planning** — a Planner agent breaks any goal into 3–8 structured steps with explicit dependencies
 - **Specialist AI agents** — the Planner automatically assigns one of 12 domain experts (Backend Architect, Frontend Developer, AI Engineer, etc.) to each step; fully overridable in the review phase
+- **Agent Skills** — file-based system prompt packages (SKILL.md) that override a specialist's default prompt with a specific methodology; assignable per step or when redoing a step
 - **Parallel wave execution** — independent steps run concurrently; dependent steps wait only for their specific prerequisites
 - **Real-time Kanban board** — watch steps move through Queue → Running → Done / Failed live, with the agent specialist shown on each card
 - **Per-step model selection** — assign a different LLM model to each step
 - **Step output preview** — click any completed step card to read the full output before it reaches the aggregator
+- **Redo with override** — re-run any completed step with a different specialist and/or skill to iterate towards a better output
 - **Failure recovery** — retry only the failed steps, or skip them and aggregate what succeeded
 - **Multiple LLM providers** — local (Jan.ai, Ollama) and cloud (OpenAI, Anthropic, Custom endpoint)
+- **Light / dark theme** — toggle between light and dark mode; preference persisted in localStorage
 - **Configurable retries** — tune LangChain chain-level retries to balance speed vs reliability
 - **Docker-ready** — single `docker compose up --build` to run anywhere
 
@@ -30,14 +33,15 @@ User Input
 ┌─────────────┐
 │   Planner   │  1 LLM call → structured JSON plan (steps + dependencies)
 └──────┬──────┘
-       │  Plan Review (user accepts/rejects steps, assigns models + specialist agent)
+       │  Plan Review (user accepts/rejects steps, assigns models, specialist + skill per step)
        ▼
 ┌─────────────────────────────────────┐
 │         Execution Waves             │
-│  Wave 1: [Step A 🏗] [Step B 📝] ──►│  parallel, each with specialist prompt
+│  Wave 1: [Step A 🏗] [Step B 📝] ──►│  parallel, each with specialist/skill prompt
 │  Wave 2: [Step C 🔍]           ───►│  (C depends on A or B)
 │  Wave 3: [Step D 📊]           ───►│
 └──────────────────┬──────────────────┘
+                   │  Done step → click to view output or Redo with different specialist/skill
                    │  Failure → action panel (retry / skip / cancel)
                    ▼
 ┌─────────────┐
@@ -147,21 +151,29 @@ hierarchy_pai/
 │   │   ├── agents/
 │   │   │   ├── agent_registry.ex  # 12 specialist personas + system prompts
 │   │   │   ├── planner.ex         # Decomposes task into JSON plan
-│   │   │   ├── executor.ex        # Runs a single step with specialist prompt
+│   │   │   ├── executor.ex        # Runs a single step with specialist/skill prompt
 │   │   │   └── aggregator.ex      # Synthesises all step outputs
 │   │   ├── orchestrator.ex        # Wave-based parallel execution
+│   │   ├── provider_store.ex      # ETS-backed saved LLM provider configs
+│   │   ├── skill_store.ex         # ETS-backed skill loader (priv/skills/)
 │   │   └── llm_provider.ex        # Builds LangChain models per provider
 │   └── hierarchy_pai_web/
 │       ├── live/
 │       │   └── planner_live.ex    # Main LiveView (UI + state machine)
 │       └── router.ex
 ├── assets/
-│   ├── css/app.css                # Tailwind CSS v4
+│   ├── css/app.css                # Tailwind CSS v4 + DaisyUI v5
 │   └── js/app.js                  # LiveView + colocated hooks
 ├── config/
 │   ├── config.exs
 │   ├── prod.exs
 │   └── runtime.exs                # Reads env vars at startup
+├── priv/
+│   └── skills/                    # Seed SKILL.md files (one dir per skill)
+│       ├── press-release/
+│       ├── discovery-process/
+│       ├── jobs-to-be-done/
+│       └── epic-breakdown/
 ├── Dockerfile                     # Multi-stage Docker build
 ├── docker-compose.yml
 └── doc/                           # Documentation
@@ -187,6 +199,7 @@ mix assets.deploy     # build production assets
 | [Installation](doc/installation.md) | Detailed setup for local dev, Docker, and releases |
 | [LLM Provider Setup](doc/providers.md) | How to configure Jan.ai, Ollama, OpenAI, Anthropic |
 | [Specialist Agents](doc/agents.md) | All 12 agent types, their expertise, and how to assign them |
+| [Agent Skills](doc/skills.md) | SKILL.md format, seed skills, adding new skills via PR |
 | [Task Examples](doc/examples.md) | Sample prompts with expected outputs and agent assignments |
 | [Troubleshooting](doc/troubleshooting.md) | Common errors and how to fix them |
 
@@ -210,4 +223,4 @@ Planned persistence work:
 
 - [ ] **Streaming step output in modal** — the step output modal currently shows the final result; stream tokens live as the step executes
 - [ ] **File/image input** — allow users to attach files or images as additional context for the task
-- [ ] **Custom agent personas** — let users define and save their own specialist agent prompts through the UI
+- [x] **Custom agent personas** — add your own specialist prompts as SKILL.md files in `priv/skills/`; see [Agent Skills](doc/skills.md)
