@@ -251,6 +251,49 @@ After the plan is generated, review the **Specialist** dropdown on each step car
 - **Override for writing tasks** — change to 📝 *Content Creator* for any step that produces prose, copy, or documentation
 - **Smaller local models** — if using Jan.ai or Ollama with a 7B–8B model, consider switching all steps to ⚡ *General Executor* since smaller models may ignore rich persona prompts
 
+### Using Skills for structured outputs
+
+[Agent Skills](skills.md) let you apply a specific methodology or output format to any step. Add the **Skill** dropdown on each step card alongside the Specialist:
+
+| Goal | Specialist | Skill |
+|---|---|---|
+| Write an Amazon-style product announcement | Content Creator | `press-release` |
+| Surface user needs through discovery questions | Trend Researcher | `discovery-process` |
+| Map customer jobs with opportunity scoring | Feedback Synthesizer | `jobs-to-be-done` |
+| Break an epic into user stories | Sprint Prioritizer | `epic-breakdown` |
+
+**Example — product launch announcement:**
+
+```
+Write a product launch plan for a new AI-powered expense tracking mobile app
+targeting freelancers. Include: positioning, core messaging, launch channels,
+content calendar for week 1, and success metrics.
+```
+
+After reviewing the plan, find the step about *messaging* or *launch copy* and assign:
+- Specialist → 📝 Content Creator
+- Skill → `press-release`
+
+The step will produce an Amazon-style working-backwards press release instead of generic copy.
+
+### Iterating with Redo + override
+
+When a completed step's output isn't quite right, use **Redo** to re-run it with a different specialist or skill — without re-running the entire pipeline:
+
+1. Click the **Redo** button on the done step card in the Execution Board
+2. In the **Override for this redo** section, change the Specialist and/or Skill
+3. Click **Confirm Redo**
+
+**Example iteration flow:**
+
+| Run | Specialist | Skill | Result |
+|---|---|---|---|
+| First | Content Creator | *(none)* | Generic product description |
+| Redo 1 | Content Creator | `press-release` | Structured Amazon PR format |
+| Redo 2 | Growth Hacker | `press-release` | PR with GTM angle and acquisition focus |
+
+Compare outputs in the step output modal (click 👁 **View** on each version) before accepting the final answer.
+
 ### Per-step model assignment
 
 After the plan is generated, use the model dropdown on each step card to:

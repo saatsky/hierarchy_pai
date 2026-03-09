@@ -104,7 +104,10 @@ config :tailwind,
       --input=assets/css/app.css
       --output=priv/static/assets/css/app.css
     ),
-    cd: Path.expand("..", __DIR__)
+    cd: Path.expand("..", __DIR__),
+    # priv/bin/watchman stub silences the "watchman: not found" warning from Tailwind v4.
+    # Tailwind checks for watchman but falls back to inotify/FSEvents — the stub avoids noise.
+    env: %{"PATH" => Path.expand("../priv/bin", __DIR__) <> ":" <> (System.get_env("PATH") || "")}
   ]
 
 # Configure Elixir's Logger

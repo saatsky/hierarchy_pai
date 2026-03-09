@@ -17,6 +17,8 @@ config :hierarchy_pai, HierarchyPaiWeb.Endpoint,
   secret_key_base: "uLsX5tWlP505vNBaer1y3o5qmdcvPzoeOvMLbkm8kZaUZbsw7nAYvnVJww8VKq87",
   watchers: [
     esbuild: {Esbuild, :install_and_run, [:hierarchy_pai, ~w(--sourcemap=inline --watch)]},
+    # Tailwind v4 emits "watchman: not found" when the optional watchman daemon is absent;
+    # it falls back to native inotify/FSEvents automatically — the warning is harmless noise.
     tailwind: {Tailwind, :install_and_run, [:hierarchy_pai, ~w(--watch)]}
   ]
 

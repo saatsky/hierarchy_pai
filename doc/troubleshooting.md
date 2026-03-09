@@ -83,7 +83,65 @@ ollama serve
 
 ---
 
+## Skills Issues
+
+### `GitHub API returned HTTP 404` when clicking "Check for updates"
+
+**Cause**: The `priv/skills/` directory exists locally but has not been pushed to the `main` branch of the `saatsky/hierarchy_pai` repository. The sync button fetches from the GitHub Contents API, which returns 404 if the path doesn't exist on the remote.
+
+**Fix**: Commit and push your local `priv/skills/` directory to the repository:
+
+```bash
+git add priv/skills/
+git commit -m "Add seed skills"
+git push origin main
+```
+
+Once pushed, the sync button will return `N new skill(s) loaded from GitHub.`
+
+---
+
+### `GitHub API rate limit exceeded`
+
+**Cause**: Unauthenticated GitHub API calls are limited to 60 requests per hour per IP address.
+
+**Fix**: Wait approximately one hour and try again. The sync fetches each skill file as a separate API call, so repositories with many skills consume more quota.
+
+---
+
 ## UI & Browser Issues
+
+### `watchman: not found` in dev server output
+
+**Symptoms**: The following appears in the terminal when running `mix phx.server`:
+
+```
+sh: 1: watchman: not found
+```
+
+**Cause**: Tailwind v4's standalone CLI checks for Facebook's optional `watchman` file-watching daemon at startup. When absent it falls back to the OS-native watcher (inotify on Linux, FSEvents on macOS) — the warning is informational only.
+
+**Status**: Fixed in the current codebase. A stub `priv/bin/watchman` script is included and added to `PATH` via the tailwind profile's `env` config, which silences the warning without requiring a system-level install.
+
+If you see the warning after a fresh clone, run:
+
+```bash
+chmod +x priv/bin/watchman
+```
+
+The watcher works correctly regardless — this warning never affects functionality.
+
+---
+
+### Theme toggle clicks but page colours don't change
+
+**Cause**: An earlier version of the app used hardcoded Tailwind slate/gray colour classes throughout the template (`bg-slate-900`, `text-slate-300`, etc.) that don't respond to `data-theme` changes.
+
+**Status**: Fixed — all hardcoded neutral colours have been replaced with DaisyUI semantic classes (`bg-base-100/200/300`, `text-base-content`). The theme toggle now correctly switches between light and dark modes.
+
+**If you still see it**: Do a hard browser refresh (`Ctrl+Shift+R` / `Cmd+Shift+R`) to clear any cached assets. If running Docker, rebuild the image to pick up the updated CSS.
+
+---
 
 ### Provider dropdown change does nothing
 
