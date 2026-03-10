@@ -5,6 +5,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
   alias HierarchyPai.Agents.AgentRegistry
   alias HierarchyPai.ProviderStore
   alias HierarchyPai.SkillStore
+  alias HierarchyPai.RunStore
 
   @providers [
     {"Jan.ai (local)", :jan_ai},
@@ -22,6 +23,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(HierarchyPai.PubSub, pubsub_topic)
+      Phoenix.PubSub.subscribe(HierarchyPai.PubSub, "mcp_runs")
       # Auto-check Jan.ai on connect
       send(self(), :fetch_local_models)
     end
@@ -68,7 +70,8 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:saved_providers, ProviderStore.list())
      |> assign(:provider_form, nil)
      |> assign(:planner_provider_id, pick_default_provider_id(ProviderStore.list()))
-     |> assign(:redo_confirm, nil)}
+     |> assign(:redo_confirm, nil)
+     |> assign(:mcp_runs, RunStore.list())}
   end
 
   @impl true
@@ -1094,6 +1097,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:skills_sync_result, {:error, reason})}
   end
 
+  def handle_info({:run_store, {:mcp_run_updated, _run}}, socket) do
+    {:noreply, assign(socket, :mcp_runs, RunStore.list())}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # ── Helpers ────────────────────────────────────────────────────────────────
@@ -1221,6 +1228,22 @@ defmodule HierarchyPaiWeb.PlannerLive do
   def render(assigns) do
     ~H"""
     <div id="download-hook" phx-hook=".DownloadFile"></div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".MCPCopy">
+      export default {
+        mounted() {
+          this.el.addEventListener("click", () => {
+            const url = this.el.dataset.url;
+            navigator.clipboard.writeText(url).then(() => {
+              const icon = this.el.querySelector("svg");
+              if (icon) {
+                icon.style.color = "#34d399";
+                setTimeout(() => { icon.style.color = ""; }, 1500);
+              }
+            });
+          });
+        }
+      }
+    </script>
     <script :type={Phoenix.LiveView.ColocatedHook} name=".DownloadFile">
       export default {
         mounted() {
@@ -1684,6 +1707,81 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <p class="text-xs text-base-content/40 leading-relaxed">
                   Skills replace the default specialist prompt for a step. Select a skill per step in the review plan above.
                 </p>
+              </div>
+
+              <%!-- MCP Server panel --%>
+              <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
+                    <.icon name="hero-cpu-chip" class="w-3.5 h-3.5 text-purple-400" /> MCP Server
+                    <span class="inline-flex items-center gap-1 ml-1 bg-emerald-600/20 text-emerald-400 text-xs px-1.5 py-0.5 rounded-full">
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse">
+                      </span>
+                      Active
+                    </span>
+                  </p>
+                </div>
+
+                <%!-- Endpoint URL --%>
+                <div class="space-y-1">
+                  <p class="text-xs text-base-content/50">Endpoint</p>
+                  <div class="flex items-center gap-2">
+                    <code class="flex-1 text-xs bg-base-100/60 border border-base-300/40 rounded-lg px-2.5 py-1.5 text-purple-300 font-mono truncate">
+                      http://localhost:4000/mcp
+                    </code>
+                    <button
+                      id="mcp-copy-btn"
+                      phx-hook=".MCPCopy"
+                      data-url="http://localhost:4000/mcp"
+                      class="shrink-0 p-1.5 rounded-lg hover:bg-base-100/60 text-base-content/40 hover:text-base-content/80 transition-colors"
+                      title="Copy endpoint URL"
+                    >
+                      <.icon name="hero-clipboard" class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <%!-- Recent MCP runs --%>
+                <%= if @mcp_runs != [] do %>
+                  <div class="space-y-1">
+                    <p class="text-xs text-base-content/50">Recent runs</p>
+                    <%= for run <- Enum.take(@mcp_runs, 5) do %>
+                      <div class="flex items-center gap-2 py-1.5 border-b border-base-300/20 last:border-0">
+                        <span class={[
+                          "w-1.5 h-1.5 rounded-full shrink-0",
+                          case run.status do
+                            :done -> "bg-emerald-400"
+                            :error -> "bg-red-400"
+                            _ -> "bg-amber-400 animate-pulse"
+                          end
+                        ]}>
+                        </span>
+                        <p
+                          class="flex-1 min-w-0 text-xs text-base-content/70 truncate"
+                          title={run.task}
+                        >
+                          {run.task}
+                        </p>
+                        <span class={[
+                          "text-xs px-1.5 py-0.5 rounded font-mono shrink-0",
+                          case run.status do
+                            :done -> "bg-emerald-900/30 text-emerald-400"
+                            :error -> "bg-red-900/30 text-red-400"
+                            :planning -> "bg-amber-900/30 text-amber-400"
+                            :executing -> "bg-blue-900/30 text-blue-400"
+                            _ -> "bg-base-100/60 text-base-content/50"
+                          end
+                        ]}>
+                          {run.status}
+                        </span>
+                      </div>
+                    <% end %>
+                  </div>
+                <% else %>
+                  <p class="text-xs text-base-content/40 text-center py-2">
+                    No MCP runs yet. Connect a client to <code class="text-purple-400">POST /mcp</code>.
+                  </p>
+                <% end %>
               </div>
 
               <%!-- About card --%>

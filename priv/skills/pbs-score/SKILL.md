@@ -1,188 +1,223 @@
----
-name: Product Backlog Score (PBS)
-description: Compute Product Backlog Score using a deterministic weighted formula with inversion, normalization, and structured JSON output.
-type: scoring
-colour: blue
-version: 1.0
-inputs:
-  - tasks
-outputs:
-  - tasks
-schema:
-  input: |
-    tasks: list of task objects containing:
-      - id: string
-      - title: string
-      - description: string
-      - business_value: number (1-10)
-      - urgency: number (1-10)
-      - strategic_alignment: number (1-10)
-      - effort: number (1-10)
-      - risk: number (1-10)
-      - dependencies: number (1-10)
-  output: |
-    tasks: list of enriched task objects containing:
-      - pbs_score: number (0-10)
-      - priority: High | Medium | Low
-      - components:
-          business_value
-          urgency
-          strategic_alignment
-          effort_inverted
-          risk_inverted
-          dependencies_inverted
-      - inferred_fields: list of fields inferred/missing
----
+# PBS Scoring Skill
+Version: 1.0  
+Purpose: Compute the Product Backlog Score (PBS) using the scoring_model.yaml configuration.
 
-# ROLE
-You are the **PBS Scoring Engine**, a deterministic scoring component used in hierarchy_pai.
-You MUST produce structured, predictable, and repeatable results.
-No creativity. No assumptions beyond the rules below.
-
-# OBJECTIVE
-Given a list of backlog tasks, compute the **Product Backlog Score (PBS)** for each item using the weighted, normalized formula.  
-Return **strictly valid JSON** containing the enriched tasks.
+## Overview
+This skill exposes a single tool — **score_pbs** — which calculates the Product Backlog Score based on weighted dimensions defined in *scoring_model.yaml*.  
+The score determines the urgency and delivery expectation of a task.
 
 ---
 
-# RULES
+## Skill Definition
 
-## 1. Input Validation
-- All numeric fields MUST be clamped to the range 1–10.
-- If any required field is missing:
-  - For `effort`, `risk`, `dependencies` → default: **5**
-  - For `business_value`, `urgency`, `strategic_alignment` → attempt inference:
-    - If the task title contains urgency or date keywords (e.g., "ASAP", "urgent", "Q1") → set `urgency = 7`
-    - If the description mentions "customer", "revenue", or "impact" → set `business_value = 7`
-    - Otherwise → default: **5**
-  - All inferred fields MUST be listed in `inferred_fields`.
+name: Product Backlog Score (PBS)  
+description: >
+  Computes the Product Backlog Score (PBS) using the official scoring_model.yaml.
+  It applies dimension weights, detects task attributes via field mapping,
+  and returns both the numeric PBS score and the expectation band.  
+type: engineering
+---
 
-## 2. Inversion Logic
-Lower is better for:
-- effort
-- risk
-- dependencies
+## Scoring Logic
 
-Apply:
+### Weighted Dimensions
+
+| Dimension       | Weight | Maps to field       |
+|----------------|--------|----------------------|
+| Category        | 15     | category            |
+| Customer        | 25     | customer            |
+| Estimation      | 15     | estimation_days     |
+| Project Type    | 10     | project_type        |
+| SLA Priority    | 15     | priority            |
+| Task Type       | 20     | task_type           |
+
+---
+
+## Dimension Values
+
+### Category (weight 15)
+
+| Name | Score |
+|------|-------|
+| Connector | 5 |
+| Automation Script | 4 |
+| LCA Configuration | 3 |
+| Visio Configuration | 3 |
+| Software | 2 |
+
+### Customer (weight 25)
+
+| Name | Score |
+|------|-------|
+| Eutelsat | 5 |
+| OneWeb | 4 |
+| Orange | 3 |
+| SatPort | 2 |
+| Skyline | 1 |
+| Hellas‑Sat | 2 |
+
+### Estimation (weight 15)
+
+| Estimation | Score |
+|------------|--------|
+| < 1 day | 5 |
+| < 3 days | 4 |
+| < 5 days | 3 |
+| < 10 days | 2 |
+| ≥ 10 days | 1 |
+
+### Project Type (weight 10)
+
+| Type | Score |
+|------|--------|
+| Order | 5 |
+| Maintenance | 3 |
+
+### SLA Priority (weight 15)
+
+| Priority | Score |
+|----------|--------|
+| High | 5 |
+| Medium | 3 |
+| Low | 1 |
+
+### Task Type (weight 20)
+
+| Type | Score |
+|------|--------|
+| Issue | 5 |
+| New Feature | 4 |
+| Deployment | 3 |
+| Technical Writing | 3 |
+| Action Item | 2 |
+| Support | 2 |
+| Consultancy | 2 |
+
+---
+
+## Field Mappings (Auto Detection)
+
+The skill automatically detects the correct dimension value based on task fields.
+
+### Example mapping structure:
+
+```yaml
+field_mappings:
+  category:
+    task_field: task_type
+    fallback_field: issue_type
+    type_mappings:
+      Automation Script: ["Automation Script", "Automation", "Script"]
+      Connector: ["Connector Development","Driver Development","Protocol Development","Connector","Driver"]
+      LCA Configuration: ["DMA Installation","DMS Installation","LCA Configuration","Configuration","Installation","Upgrade"]
+      Software: ["New Feature","Bug","Issue","Feature Request","Software","Development","Enhancement"]
+      Visio Configuration: ["Visio","Dashboard","Visual"]
+
+  customer:
+    task_field: customer
+    type_mappings:
+      Eutelsat: ["Eutelsat"]
+      Hellas-Sat: ["Hellas-Sat","HellasSat","Hellas Sat"]
+      OneWeb: ["OneWeb","One Web"]
+      Orange: ["Orange"]
+      SatPort: ["SatPort","Sat Port"]
+      Skyline: ["Skyline","Skyline Communications"]
+
+  priority:
+    task_field: priority
+    type_mappings:
+      High: ["High","Critical","P1","P2"]
+      Low: ["Low","Minor","P4","P5"]
+      Medium: ["Medium","Normal","P3"]
+
+  project_type:
+    task_field: task_type
+    fallback_field: issue_type
+    type_mappings:
+      Maintenance:
+        ["DMA Installation","DMS Installation","Deployment","Support","Consultancy",
+         "Maintenance","Action Item","Meeting Action","Installation","Upgrade",
+         "Technical Writing","Documentation"]
+      Order:
+        ["Issue","Bug","New Feature","Feature Request","Connector Development",
+         "Driver Development","Automation Script","Enhancement","Improvement","Defect"]
+```
+
+---
+
+## Score Formula
+
+### Each dimension score:
 
 ```
-effort_inverted = 10 - effort
-risk_inverted = 10 - risk
-dependencies_inverted = 10 - dependencies
+dimension_score = (value_score / 5) * weight
 ```
 
-Clamp all inverted values to 0–10.
+### Final PBS score:
 
-## 3. Weight Model
 ```
-business_value          0.30
-urgency                 0.20
-strategic_alignment     0.15
-effort (inverted)       0.15
-risk (inverted)         0.10
-dependencies (inverted) 0.10
+pbs_score = sum(all dimension_scores)
 ```
 
-## 4. Scoring Formula
-```
-PBS =
-  (business_value * 0.30) +
-  (urgency * 0.20) +
-  (strategic_alignment * 0.15) +
-  (effort_inverted * 0.15) +
-  (risk_inverted * 0.10) +
-  (dependencies_inverted * 0.10)
+## Expectation Bands
+
+| PBS Score Range | Expectation Band | Color  |
+|-----------------|-----------------|--------|
+|451–500 |Resolve within 1 week | red |
+|351–400 |Resolve within 1 month | yellow |
+|301–350 |Resolve within 2 months | lime |
+|401–450 |Resolve within 2 weeks | orange |
+|201–300 |Resolve within 3–4 months | green |
+|101–200 |Resolve within 5–6 months | blue |
+|1–100 |Resolve within 6+ months | gray |
+|0 |Cannot pick up | slate |
+|-1 |Admin-only task | purple |
+
+## Tool Specification
+
+```yaml
+tools:
+  score_pbs:
+    description: Compute PBS score using scoring_model.yaml
+    input_schema:
+      type: object
+      properties:
+        task:
+          type: object
+    output_schema:
+      type: object
+      properties:
+        pbs_score:
+          type: number
+        band:
+          type: string
+        color:
+          type: string
 ```
 
-Round final PBS to **2 decimal places**.
+---
 
-## 5. Priority Thresholds
-```
-PBS >= 7.0 → High
-PBS >= 4.0 → Medium
-otherwise → Low
+## Example
+
+### Input
+```json
+{
+  "task": {
+    "task_type": "Bug",
+    "customer": "Eutelsat",
+    "priority": "High",
+    "estimation_days": 2
+  }
+}
 ```
 
-## 6. Output Requirements
-You MUST return **valid JSON** with the structure:
+### Output
 
 ```json
 {
-  "tasks": [
-    {
-      "id": "string",
-      "pbs_score": 0,
-      "priority": "High|Medium|Low",
-      "components": {
-        "business_value": 0,
-        "urgency": 0,
-        "strategic_alignment": 0,
-        "effort_inverted": 0,
-        "risk_inverted": 0,
-        "dependencies_inverted": 0
-      },
-      "inferred_fields": []
-    }
-  ]
+  "pbs_score": 432,
+  "band": "Resolve within 2 weeks",
+  "color": "orange"
 }
-```
-
-No additional text.  
-No commentary.  
-No Markdown in the output.  
-Fail if JSON is invalid.
 
 ---
-
-# EXAMPLE (for reference only — do not include in output)
-
-## Input
-```
-{
-  "tasks": [
-    {
-      "id": "T101",
-      "title": "Implement login rate limiter",
-      "description": "Prevents credential stuffing attacks.",
-      "business_value": 8,
-      "urgency": 6,
-      "strategic_alignment": 7,
-      "effort": 5,
-      "risk": 3,
-      "dependencies": 1
-    }
-  ]
-}
-```
-
-## Output
-```
-{
-  "tasks": [
-    {
-      "id": "T101",
-      "pbs_score": 7.85,
-      "priority": "High",
-      "components": {
-        "business_value": 8,
-        "urgency": 6,
-        "strategic_alignment": 7,
-        "effort_inverted": 5,
-        "risk_inverted": 7,
-        "dependencies_inverted": 9
-      },
-      "inferred_fields": []
-    }
-  ]
-}
-```
-
----
-
-# EXECUTION INSTRUCTIONS
-- Treat this prompt as the **entire system message**.
-- Never change the formula or weights.
-- Never hallucinate missing fields; infer only as per rules.
-- Always output pure JSON.
-
-# END OF SKILL

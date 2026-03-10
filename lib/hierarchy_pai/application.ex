@@ -13,6 +13,7 @@ defmodule HierarchyPai.Application do
       {Phoenix.PubSub, name: HierarchyPai.PubSub},
       HierarchyPai.ProviderStore,
       HierarchyPai.SkillStore,
+      HierarchyPai.RunStore,
       # Start to serve requests, typically the last entry
       HierarchyPaiWeb.Endpoint
     ]

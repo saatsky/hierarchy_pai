@@ -1,254 +1,180 @@
+# TOOLS.md — hierarchy_pai MCP Server (ash_ai)
 
-# TOOLS.md — hierarchy_pai MCP Interface (Agent‑Centric, Extensible)
+hierarchy_pai exposes a **multi-agent planning and execution pipeline** as an MCP server.
+Any MCP-compatible client (Jan.ai, VS Code, Claude Desktop, etc.) can call these tools to
+delegate complex tasks that require structured decomposition, parallel specialist execution,
+and synthesised answers.
 
-This MCP server exposes a **multi‑agent**, **multi‑skill**, **pipeline‑driven** reasoning engine used for backlog scoring, prioritization, semantic analysis, risk modeling, and extensible AI workflows.
+## Endpoint
 
-It supports:
-- Agent discovery (`list_agents`)
-- Skill discovery (`list_skills`)
-- Skill metadata inspection (`describe_skill`)
-- Dynamic multi‑step pipelines (`execute_task`)
-- Pipeline introspection (`inspect_pipeline`)
-- Natural‑language explanations (`explain_pipeline`)
-
-This file specifies the **public API contract** between Jan.ai (or any MCP client) and `hierarchy_pai`.
-
----
-# 1. API OVERVIEW
-
-`hierarchy_pai` exposes **one generic task execution engine** and several discovery/introspection tools.
-
-### Available MCP Tools
-| Tool Name | Purpose |
-|----------|---------|
-| `list_agents` | Discover available reasoning agents |
-| `list_skills` | Discover available skills and the agent(s) that implement them |
-| `describe_skill` | Retrieve schema & parameters for a given skill |
-| `execute_task` | Execute a full multi‑step pipeline |
-| `inspect_pipeline` | Validate & inspect pipeline steps without executing |
-| `explain_pipeline` | Provide natural‑language reasoning for chosen pipeline |
-
----
-# 2. TOOL: `list_agents`
-
-### Description
-Returns the list of internal agents available inside hierarchy_pai.
-
-### Response Schema
-```json
-{
-  "agents": [
-    {
-      "id": "planner-agent",
-      "description": "General planning, reasoning, workflow composition."
-    },
-    {
-      "id": "backlog-analyzer",
-      "description": "Backlog scoring, grooming, PBS, DoR, triage."
-    },
-    {
-      "id": "semantic-model",
-      "description": "Clustering, duplicate detection, embeddings."
-    },
-    {
-      "id": "risk-model-agent",
-      "description": "Risk scoring, impact estimation, risk heatmaps."
-    },
-    {
-      "id": "estimation-agent",
-      "description": "Effort estimation and sizing."
-    },
-    {
-      "id": "prioritization-agent",
-      "description": "WSJF, RICE, MoSCoW, sort & filter."
-    }
-  ]
-}
+```
+POST http://localhost:4000/mcp
 ```
 
----
-# 3. TOOL: `list_skills`
-
-### Description
-Returns all skills and which agents support them.
-
-### Response Schema
-```json
-{
-  "skills": [
-    { "name": "pbs_score", "agents": ["backlog-analyzer"], "params": {"weights": "object", "round_to": "number"}},
-    { "name": "definition_of_ready", "agents": ["backlog-analyzer"], "params": {"checklist": "array"}},
-    { "name": "wsjf", "agents": ["prioritization-agent"], "params": {"use_inferred_cost_of_delay": "boolean"}},
-    { "name": "cluster_semantic", "agents": ["semantic-model"], "params": {"k": "number"}},
-    { "name": "detect_duplicates", "agents": ["semantic-model"], "params": {}},
-    { "name": "estimate_effort", "agents": ["estimation-agent"], "params": {}},
-    { "name": "risk_heatmap", "agents": ["risk-model-agent"], "params": {}},
-    { "name": "sort", "agents": ["prioritization-agent"], "params": {"by": "string", "direction": "string"}},
-    { "name": "filter", "agents": ["prioritization-agent"], "params": {"field": "string", "value": "string"}},
-    { "name": "summarize_backlog", "agents": ["planner-agent"], "params": {} }
-  ]
-}
-```
+Standard MCP JSON-RPC 2.0 over HTTP (streamable). Protocol version: `2024-11-05`.
 
 ---
-# 4. TOOL: `describe_skill`
 
-### Description
-Returns detailed metadata about a skill: parameter schema, expected inputs, expected outputs.
+## Tools
 
-### Request Example
-```json
-{ "skill": "pbs_score" }
-```
-
-### Response Example
-```json
-{
-  "skill": "pbs_score",
-  "description": "Compute Product Backlog Score using weighted, normalized formula.",
-  "input_schema": {
-    "tasks": "array"
-  },
-  "output_schema": {
-    "tasks": "array"
-  },
-  "params": {
-    "weights": {
-      "business_value": "number",
-      "urgency": "number",
-      "strategic_alignment": "number",
-      "effort": "number",
-      "risk": "number",
-      "dependencies": "number"
-    },
-    "round_to": "number"
-  },
-  "version": "1.1"
-}
-```
+| Tool | Purpose |
+|------|---------|
+| `run_task` | Full pipeline: plan → execute → synthesise answer |
+| `plan_task` | Planning phase only — returns plan JSON |
+| `execute_plan` | Execute a pre-built plan JSON |
+| `list_specialists` | Discover available specialist agents |
+| `list_skills` | Discover loaded SKILL.md skills |
 
 ---
-# 5. TOOL: `execute_task`
 
-### Description
-Executes a **pipeline** consisting of multiple steps.
-Each step specifies:
-- agent
-- skill
-- params
+## `run_task`
 
-The system maintains a **shared context** across steps (typically including `tasks`).
+Run the full hierarchy_pai pipeline end-to-end.
 
-### Request Schema
-```jsonc
-{
-  "task_type": "pipeline",
-  "version": "1.0",
-  "pipeline": [
-    {
-      "agent": "backlog-analyzer",
-      "skill": "pbs_score",
-      "params": {
-        "weights": {
-          "business_value": 0.30,
-          "urgency": 0.20,
-          "strategic_alignment": 0.15,
-          "effort": 0.15,
-          "risk": 0.10,
-          "dependencies": 0.10
-        },
-        "round_to": 2
-      }
-    },
-    {
-      "agent": "backlog-analyzer",
-      "skill": "definition_of_ready",
-      "params": { "checklist": ["title", "acceptance_criteria", "estimation"] }
-    },
-    {
-      "agent": "semantic-model",
-      "skill": "cluster_semantic",
-      "params": { "k": 10 }
-    },
-    {
-      "agent": "prioritization-agent",
-      "skill": "sort",
-      "params": { "by": "pbs_score", "direction": "desc" }
-    }
-  ],
-  "inputs": {
-    "tasks": []
-  },
-  "explain": true,
-  "trace": true,
-  "strict": false
-}
-```
+Decomposes `task` into parallel specialist steps using the Planner LLM, executes each
+concurrently with the appropriate specialist agent, and returns a synthesised final answer.
 
-### Output Schema
+### Arguments
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `task` | string | ✅ | The task or question to plan and execute |
+| `provider` | string | ❌ | Saved provider name or ID from the hierarchy_pai UI. Defaults to first saved provider |
+
+### Response (JSON string)
+
 ```json
 {
-  "status": "ok",
-  "results": {
-    "tasks": []
-  },
-  "trace": [],
-  "explanations": [],
-  "version": "1.0"
-}
-```
-
----
-# 6. TOOL: `inspect_pipeline`
-
-Returns a validation of a pipeline without running it.
-
-### Example
-```json
-{
-  "valid": true,
+  "run_id": "a3f8c1d2",
+  "answer": "## Final synthesised answer...",
   "steps": [
-    { "skill": "pbs_score", "agent": "backlog-analyzer", "status": "ok" },
-    { "skill": "definition_of_ready", "agent": "backlog-analyzer", "status": "ok" }
+    { "id": "step-1", "output": "Step output text..." },
+    { "id": "step-2", "output": "Step output text..." }
+  ]
+}
+```
+
+On error:
+```json
+{ "run_id": "a3f8c1d2", "error": "No provider found. Please add a provider at http://localhost:4000" }
+```
+
+---
+
+## `plan_task`
+
+Generate a structured execution plan without running it. Use this to inspect or review
+the plan before committing to execution via `execute_plan`.
+
+### Arguments
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `task` | string | ✅ | The task to plan |
+| `provider` | string | ❌ | Saved provider name or ID |
+
+### Response (JSON string)
+
+```json
+{
+  "goal": "The high-level goal",
+  "steps": [
+    {
+      "id": "step-1",
+      "title": "Step title",
+      "description": "What this step does",
+      "agent": "content_creator",
+      "depends_on": []
+    }
   ]
 }
 ```
 
 ---
-# 7. TOOL: `explain_pipeline`
 
-### Example Output
+## `execute_plan`
+
+Execute a pre-built plan produced by `plan_task`. Pass the JSON string from `plan_task`
+as the `plan` argument.
+
+### Arguments
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `task` | string | ✅ | Original task description (for run tracking) |
+| `plan` | string | ✅ | Plan JSON string as returned by `plan_task` |
+| `provider` | string | ❌ | Saved provider name or ID |
+
+### Response (JSON string)
+
+Same shape as `run_task` response (`run_id`, `answer`, `steps`).
+
+---
+
+## `list_specialists`
+
+List all available specialist agents.
+
+### Arguments
+
+None.
+
+### Response (JSON string)
+
 ```json
 {
-  "explanations": [
-    "pbs_score chosen for priority scoring using weighted model.",
-    "definition_of_ready ensures tasks are actionable.",
-    "cluster_semantic groups similar tasks for deduplication.",
-    "sort orders tasks by descending PBS."
+  "count": 12,
+  "specialists": [
+    { "id": "executor", "name": "⚡ General Executor" },
+    { "id": "backend_architect", "name": "🏗️ Backend Architect" },
+    { "id": "frontend_developer", "name": "🎨 Frontend Developer" },
+    { "id": "ai_engineer", "name": "🤖 AI Engineer" },
+    { "id": "devops_automator", "name": "🚀 DevOps Automator" },
+    { "id": "rapid_prototyper", "name": "⚡ Rapid Prototyper" },
+    { "id": "content_creator", "name": "📝 Content Creator" },
+    { "id": "trend_researcher", "name": "🔍 Trend Researcher" },
+    { "id": "feedback_synthesizer", "name": "💬 Feedback Synthesizer" },
+    { "id": "data_analytics", "name": "📊 Data Analytics" },
+    { "id": "sprint_prioritizer", "name": "🎯 Sprint Prioritizer" },
+    { "id": "growth_hacker", "name": "📈 Growth Hacker" }
   ]
 }
 ```
 
 ---
-# 8. Error Model
+
+## `list_skills`
+
+List all loaded SKILL.md skills.
+
+### Arguments
+
+None.
+
+### Response (JSON string)
 
 ```json
 {
-  "status": "error",
-  "error": {
-    "code": "invalid_schema",
-    "message": "Pipeline parameter "k" must be >= 1"
-  },
-  "trace_id": "req-123"
+  "count": 4,
+  "skills": [
+    { "id": "press-release", "name": "Press Release", "type": "content", "description": "Amazon-style PR..." },
+    { "id": "discovery-process", "name": "Discovery Process", "type": "research", "description": "..." },
+    { "id": "jobs-to-be-done", "name": "Jobs To Be Done", "type": "research", "description": "..." },
+    { "id": "epic-breakdown", "name": "Epic Breakdown", "type": "engineering", "description": "..." }
+  ]
 }
 ```
 
 ---
-# 9. Versioning
 
-- All requests must specify a version
-- Skills may be versioned individually: `pbs_score@1.1`
-- Pipeline execution engine evolves independently of skills
+## Implementation Notes
 
----
-# END OF TOOLS.md
+This MCP server is implemented using **ash_ai** (`AshAi.Mcp.Router` + Ash Domain + generic actions).
+The transport is a standard `Plug.Router` — no GenServer, no timeout issues.
+
+Tools are auto-discovered from the `HierarchyPai.Pipeline` Ash Domain registered in
+`config :hierarchy_pai, ash_domains: [HierarchyPai.Pipeline]`.
+
+Before calling `run_task` or `plan_task`, ensure at least one LLM provider is configured
+in the hierarchy_pai UI at `http://localhost:4000`.
+

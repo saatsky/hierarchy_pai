@@ -21,6 +21,7 @@ Hierarchical Planner AI decomposes a complex task into parallel, dependency-awar
 - **Light / dark theme** — toggle between light and dark mode; preference persisted in localStorage
 - **Configurable retries** — tune LangChain chain-level retries to balance speed vs reliability
 - **Docker-ready** — single `docker compose up --build` to run anywhere
+- **MCP Server** — expose the full pipeline as an MCP endpoint (`POST /mcp`); any MCP-compatible agent (Jan.ai, VS Code, Claude Desktop) can call `run_task`, `plan_task`, `execute_plan`, `list_specialists`, and `list_skills`
 
 ---
 
@@ -202,6 +203,40 @@ mix assets.deploy     # build production assets
 | [Agent Skills](doc/skills.md) | SKILL.md format, seed skills, adding new skills via PR |
 | [Task Examples](doc/examples.md) | Sample prompts with expected outputs and agent assignments |
 | [Troubleshooting](doc/troubleshooting.md) | Common errors and how to fix them |
+| [MCP Server API](priv/TOOLS.md) | MCP endpoint, all 5 tools, request/response schemas |
+
+---
+
+## 🔌 MCP Server
+
+hierarchy_pai exposes its full planning pipeline as an MCP server at:
+
+```
+POST http://localhost:4000/mcp
+```
+
+Any MCP-compatible client (Jan.ai, VS Code with MCP extension, Claude Desktop) can call it.
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `run_task` | Full pipeline: plan → parallel execution → synthesised answer |
+| `plan_task` | Generate a plan JSON without executing (for review/modification) |
+| `execute_plan` | Execute a plan JSON produced by `plan_task` |
+| `list_specialists` | Discover the 12 available specialist agents |
+| `list_skills` | Discover loaded SKILL.md skills |
+
+### Quick example (Jan.ai)
+
+1. Add a provider in the hierarchy_pai UI at `http://localhost:4000`
+2. In Jan.ai, add a new MCP server: **URL** `http://localhost:4000/mcp`, **Transport** `Streamable HTTP`
+3. Ask your agent to call `run_task` with your task text
+
+See [`priv/TOOLS.md`](priv/TOOLS.md) for full schema documentation.
+
+The MCP server is implemented with **ash_ai** (`AshAi.Mcp.Router`), using a Plug-based
+transport (no GenServer — no timeout issues for long-running pipelines).
 
 ---
 
