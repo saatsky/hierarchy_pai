@@ -14,7 +14,13 @@ defmodule HierarchyPaiWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :mcp do
+    plug HierarchyPaiWeb.Plugs.SuppressMcpPolling
+  end
+
   scope "/mcp" do
+    pipe_through :mcp
+
     forward "/", AshAi.Mcp.Router,
       otp_app: :hierarchy_pai,
       protocol_version_statement: "2024-11-05"
