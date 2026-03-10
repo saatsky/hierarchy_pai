@@ -8,7 +8,8 @@ defmodule HierarchyPai.Pipeline.Discovery do
 
   use Ash.Resource, domain: HierarchyPai.Pipeline
 
-  alias HierarchyPai.{AgentRegistry, SkillStore}
+  alias HierarchyPai.Agents.AgentRegistry
+  alias HierarchyPai.SkillStore
 
   actions do
     action :list_specialists, :string do
