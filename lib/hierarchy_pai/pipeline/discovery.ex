@@ -12,7 +12,7 @@ defmodule HierarchyPai.Pipeline.Discovery do
   alias HierarchyPai.SkillStore
 
   actions do
-    action :list_specialists, :string do
+    action :list_specialists, :map do
       description """
       List all available specialist agents in this hierarchy_pai instance.
 
@@ -28,11 +28,11 @@ defmodule HierarchyPai.Pipeline.Discovery do
             %{id: id, name: "#{icon} #{name}"}
           end)
 
-        {:ok, Jason.encode!(%{specialists: specialists, count: length(specialists)})}
+        {:ok, %{specialists: specialists, count: length(specialists)}}
       end
     end
 
-    action :list_skills, :string do
+    action :list_skills, :map do
       description """
       List all loaded skills available in this hierarchy_pai instance.
 
@@ -55,7 +55,7 @@ defmodule HierarchyPai.Pipeline.Discovery do
             }
           end)
 
-        {:ok, Jason.encode!(%{skills: skills, count: length(skills)})}
+        {:ok, %{skills: skills, count: length(skills)}}
       end
     end
   end
