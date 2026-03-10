@@ -8,6 +8,8 @@ defmodule HierarchyPai.Pipeline.TaskRunner do
 
   use Ash.Resource, domain: HierarchyPai.Pipeline
 
+  require Logger
+
   alias HierarchyPai.Pipeline.PipelineRunner
   alias HierarchyPai.RunStore
 
@@ -38,36 +40,46 @@ defmodule HierarchyPai.Pipeline.TaskRunner do
 
       run fn input, _context ->
         task = input.arguments.task
-        provider_ref = input.arguments[:provider]
+        provider_ref = Map.get(input.arguments, :provider)
 
-        with {:ok, provider_config} <- PipelineRunner.resolve_provider(provider_ref) do
-          run_id = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+        case PipelineRunner.resolve_provider(provider_ref) do
+          {:error, reason} ->
+            Logger.warning("[MCP run_task] provider resolve failed: #{reason}")
+            {:ok, Jason.encode!(%{error: reason})}
 
-          RunStore.put(%{
-            id: run_id,
-            task: task,
-            status: :planning,
-            plan: nil,
-            steps: [],
-            answer: nil,
-            error: nil
-          })
+          {:ok, provider_config} ->
+            run_id = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
-          case PipelineRunner.run_task(task, provider_config, run_id) do
-            {:ok, result} ->
-              {:ok,
-               Jason.encode!(%{
-                 run_id: run_id,
-                 answer: result.answer,
-                 steps:
-                   Enum.map(result.steps, fn s ->
-                     %{id: s["id"], output: s["output"]}
-                   end)
-               })}
+            RunStore.put(%{
+              id: run_id,
+              task: task,
+              status: :planning,
+              plan: nil,
+              steps: [],
+              answer: nil,
+              error: nil
+            })
 
-            {:error, reason} ->
-              {:ok, Jason.encode!(%{run_id: run_id, error: reason})}
-          end
+            Logger.info(
+              "[MCP run_task] starting run_id=#{run_id} task=#{String.slice(task, 0, 80)}"
+            )
+
+            case PipelineRunner.run_task(task, provider_config, run_id) do
+              {:ok, result} ->
+                {:ok,
+                 Jason.encode!(%{
+                   run_id: run_id,
+                   answer: result.answer,
+                   steps:
+                     Enum.map(result.steps, fn s ->
+                       %{id: s["id"], output: s["output"]}
+                     end)
+                 })}
+
+              {:error, reason} ->
+                Logger.error("[MCP run_task] pipeline failed run_id=#{run_id}: #{reason}")
+                {:ok, Jason.encode!(%{run_id: run_id, error: reason})}
+            end
         end
       end
     end
@@ -93,16 +105,24 @@ defmodule HierarchyPai.Pipeline.TaskRunner do
 
       run fn input, _context ->
         task = input.arguments.task
-        provider_ref = input.arguments[:provider]
+        provider_ref = Map.get(input.arguments, :provider)
 
-        with {:ok, provider_config} <- PipelineRunner.resolve_provider(provider_ref) do
-          case PipelineRunner.plan_task(task, provider_config) do
-            {:ok, plan} ->
-              {:ok, Jason.encode!(plan)}
+        case PipelineRunner.resolve_provider(provider_ref) do
+          {:error, reason} ->
+            Logger.warning("[MCP plan_task] provider resolve failed: #{reason}")
+            {:ok, Jason.encode!(%{error: reason})}
 
-            {:error, reason} ->
-              {:ok, Jason.encode!(%{error: reason})}
-          end
+          {:ok, provider_config} ->
+            Logger.info("[MCP plan_task] planning task=#{String.slice(task, 0, 80)}")
+
+            case PipelineRunner.plan_task(task, provider_config) do
+              {:ok, plan} ->
+                {:ok, Jason.encode!(plan)}
+
+              {:error, reason} ->
+                Logger.error("[MCP plan_task] planning failed: #{reason}")
+                {:ok, Jason.encode!(%{error: reason})}
+            end
         end
       end
     end
@@ -133,7 +153,7 @@ defmodule HierarchyPai.Pipeline.TaskRunner do
       run fn input, _context ->
         task = input.arguments.task
         plan_json = input.arguments.plan
-        provider_ref = input.arguments[:provider]
+        provider_ref = Map.get(input.arguments, :provider)
 
         with {:ok, plan} <- Jason.decode(plan_json),
              {:ok, provider_config} <- PipelineRunner.resolve_provider(provider_ref) do
@@ -149,6 +169,8 @@ defmodule HierarchyPai.Pipeline.TaskRunner do
             error: nil
           })
 
+          Logger.info("[MCP execute_plan] starting run_id=#{run_id}")
+
           case PipelineRunner.execute_plan(plan, provider_config, run_id) do
             {:ok, result} ->
               {:ok,
@@ -162,6 +184,7 @@ defmodule HierarchyPai.Pipeline.TaskRunner do
                })}
 
             {:error, reason} ->
+              Logger.error("[MCP execute_plan] pipeline failed run_id=#{run_id}: #{reason}")
               {:ok, Jason.encode!(%{run_id: run_id, error: reason})}
           end
         else
@@ -169,6 +192,7 @@ defmodule HierarchyPai.Pipeline.TaskRunner do
             {:ok, Jason.encode!(%{error: "Invalid plan JSON: #{Exception.message(err)}"})}
 
           {:error, reason} ->
+            Logger.warning("[MCP execute_plan] provider resolve failed: #{reason}")
             {:ok, Jason.encode!(%{error: reason})}
         end
       end
