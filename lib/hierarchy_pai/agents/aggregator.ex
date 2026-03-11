@@ -24,9 +24,9 @@ defmodule HierarchyPai.Agents.Aggregator do
   # ~2000 chars ≈ 500 tokens; 10 steps × 500 = 5000 tokens (safe for 8k-limit models).
   @max_output_chars_per_step 2000
 
-  @spec aggregate(String.t(), list(), map(), String.t()) ::
+  @spec aggregate(String.t(), list(), map(), String.t(), list()) ::
           {:ok, String.t()} | {:error, String.t()}
-  def aggregate(goal, step_results, provider_config, pubsub_topic) do
+  def aggregate(goal, step_results, provider_config, pubsub_topic, skipped_steps \\ []) do
     model = HierarchyPai.LLMProvider.build(Map.put(provider_config, :stream, true))
 
     callback_handler = %{
@@ -59,12 +59,22 @@ defmodule HierarchyPai.Agents.Aggregator do
         "### Step #{r["step_id"]}: #{r["title"]}\n#{truncated}"
       end)
 
+    skipped_note =
+      if skipped_steps == [] do
+        ""
+      else
+        titles = Enum.map_join(skipped_steps, ", ", & &1["title"])
+
+        "\n\n> **Note:** The following steps failed or were skipped and are not included above: #{titles}. " <>
+          "Please acknowledge this in your response and note any implications for the overall answer."
+      end
+
     user_message = """
     # Original Goal
     #{goal}
 
     # Step-by-Step Outputs
-    #{results_text}
+    #{results_text}#{skipped_note}
 
     Please synthesize the above into a comprehensive, well-structured final response to the original goal.
     """

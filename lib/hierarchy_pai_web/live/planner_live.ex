@@ -837,14 +837,55 @@ defmodule HierarchyPaiWeb.PlannerLive do
   @impl true
   def handle_event("skip_and_aggregate", _params, socket) do
     goal = get_in(socket.assigns.plan, ["goal"]) || ""
-    step_results = socket.assigns.step_results
+    all_steps = get_in(socket.assigns.plan, ["steps"]) || []
+
+    done_ids =
+      socket.assigns.step_statuses
+      |> Enum.filter(fn {_id, s} -> s == :done end)
+      |> MapSet.new(fn {id, _} -> id end)
+
+    # Build step_results from @step_outputs for steps that completed in this run,
+    # merging with any already-accumulated results (e.g. from a prior retry wave).
+    accumulated = socket.assigns.step_results || []
+    accumulated_ids = MapSet.new(accumulated, & &1["step_id"])
+
+    fresh_results =
+      all_steps
+      |> Enum.filter(fn step ->
+        MapSet.member?(done_ids, step["id"]) and
+          not MapSet.member?(accumulated_ids, step["id"])
+      end)
+      |> Enum.map(fn step ->
+        %{
+          "step_id" => step["id"],
+          "title" => step["title"],
+          "output" => Map.get(socket.assigns.step_outputs, step["id"], "")
+        }
+      end)
+
+    step_results = accumulated ++ fresh_results
+
+    # Collect failed/skipped steps so the aggregator can acknowledge them.
+    skipped_steps =
+      all_steps
+      |> Enum.filter(fn step ->
+        status = Map.get(socket.assigns.step_statuses, step["id"])
+        status in [:error, :pending, nil]
+      end)
+
     provider_config = build_provider_config(socket.assigns)
     topic = socket.assigns.pubsub_topic
 
     {:ok, _pid} =
       Task.start(fn ->
         try do
-          HierarchyPai.Orchestrator.reaggregate(goal, step_results, provider_config, topic)
+          HierarchyPai.Orchestrator.reaggregate(
+            goal,
+            step_results,
+            provider_config,
+            topic,
+            skipped_steps
+          )
         rescue
           e ->
             Phoenix.PubSub.broadcast(
@@ -2354,7 +2395,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         </button>
                         <button
                           phx-click="skip_and_aggregate"
-                          disabled={@step_results == []}
+                          disabled={not Enum.any?(@step_statuses, fn {_id, s} -> s == :done end)}
                           class="px-4 py-2 text-xs font-semibold rounded-lg bg-indigo-600/70 hover:bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
                         >
                           <.icon name="hero-forward" class="w-3.5 h-3.5" /> Skip &amp; aggregate
