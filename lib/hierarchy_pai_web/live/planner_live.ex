@@ -1845,7 +1845,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                             name="hero-information-circle"
                             class="w-3.5 h-3.5 text-base-content/30 hover:text-base-content/70 cursor-default transition-colors"
                           />
-                          <div class="pointer-events-none absolute bottom-full right-0 mb-1.5 z-50
+                          <div class="pointer-events-none absolute top-full right-0 mt-1 z-50
                                       w-56 rounded-lg border border-base-300 bg-base-200 p-2.5 shadow-lg
                                       text-xs text-base-content/80 leading-relaxed
                                       opacity-0 group-hover:opacity-100 transition-opacity duration-150">
