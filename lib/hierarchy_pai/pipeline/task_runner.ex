@@ -93,11 +93,11 @@ defmodule HierarchyPai.Pipeline.TaskRunner do
 
     action :plan_task, :map do
       description """
-      Generate a structured execution plan for a task without executing it.
+      Generate a structured execution plan without running it.
 
-      Returns a JSON plan object containing steps with specialist assignments and
-      dependencies. You can review and optionally modify the plan, then pass it to
-      `execute_plan` to run it.
+      Returns the plan JSON. Review or modify it, then pass to execute_plan.
+      The returned plan object has `goal` (string) and `steps` (array) fields.
+      Each step has: id, title, instruction, agent_type, expected_output, depends_on.
       """
 
       argument :task, :string do
@@ -144,7 +144,8 @@ defmodule HierarchyPai.Pipeline.TaskRunner do
       description """
       Execute a pre-built plan produced by `plan_task`.
 
-      Pass the plan object returned by `plan_task` as the `plan` argument.
+      Pass the plan object returned by `plan_task` directly as the `plan` argument.
+      The plan must be a JSON object with `goal` and `steps` fields as returned by `plan_task`.
       Returns a synthesised answer and individual step outputs.
       """
 

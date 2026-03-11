@@ -21,7 +21,7 @@ defmodule HierarchyPaiWeb.Router do
   scope "/mcp" do
     pipe_through :mcp
 
-    forward "/", AshAi.Mcp.Router,
+    forward "/", HierarchyPaiWeb.MCPRouter,
       otp_app: :hierarchy_pai,
       protocol_version_statement: "2024-11-05"
   end
