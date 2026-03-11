@@ -9,6 +9,7 @@ defmodule HierarchyPai.Agents.Executor do
   alias LangChain.Message
 
   alias HierarchyPai.Agents.AgentRegistry
+  alias HierarchyPai.Agents.ErrorHelper
   alias HierarchyPai.SkillStore
 
   # Cap each prior step's output to keep the request within model token limits.
@@ -83,29 +84,13 @@ defmodule HierarchyPai.Agents.Executor do
     case LLMChain.run(chain, mode: :while_needs_response) do
       {:ok, updated_chain} -> {:ok, updated_chain}
       {:ok, updated_chain, _} -> {:ok, updated_chain}
-      {:error, _chain, %{message: msg}} -> {:error, friendly_error(msg)}
-      {:error, _chain, reason} -> {:error, friendly_error(inspect(reason))}
-      {:error, reason} -> {:error, friendly_error(inspect(reason))}
+      {:error, _chain, %{message: msg}} -> {:error, ErrorHelper.friendly_error(msg)}
+      {:error, _chain, reason} -> {:error, ErrorHelper.friendly_error(inspect(reason))}
+      {:error, reason} -> {:error, ErrorHelper.friendly_error(inspect(reason))}
     end
   rescue
-    e -> {:error, friendly_error(Exception.message(e))}
+    e -> {:error, ErrorHelper.friendly_error(Exception.message(e))}
   end
-
-  # Map known API error patterns to actionable messages.
-  defp friendly_error(msg) when is_binary(msg) do
-    cond do
-      String.contains?(msg, "Too many requests") or String.contains?(msg, "429") ->
-        "Rate limited by provider (HTTP 429). Reduce concurrent steps or switch to a higher-tier model."
-
-      String.contains?(msg, "tokens_limit_reached") or String.contains?(msg, "too large") ->
-        "Request too large for model. Context was truncated but still exceeded the limit."
-
-      true ->
-        msg
-    end
-  end
-
-  defp friendly_error(other), do: inspect(other)
 
   defp build_messages(step, completed_results, system_prompt) do
     [

@@ -4,6 +4,7 @@ defmodule HierarchyPai.Agents.Aggregator do
   streaming tokens to PubSub as they arrive. Returns `{:ok, answer}` or `{:error, reason}`.
   """
 
+  alias HierarchyPai.Agents.ErrorHelper
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
 
@@ -93,12 +94,12 @@ defmodule HierarchyPai.Agents.Aggregator do
     case LLMChain.run(chain, mode: :while_needs_response) do
       {:ok, updated_chain} -> {:ok, updated_chain}
       {:ok, updated_chain, _} -> {:ok, updated_chain}
-      {:error, _chain, %{message: msg}} -> {:error, msg}
-      {:error, _chain, reason} -> {:error, inspect(reason)}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:error, _chain, %{message: msg}} -> {:error, ErrorHelper.friendly_error(msg)}
+      {:error, _chain, reason} -> {:error, ErrorHelper.friendly_error(inspect(reason))}
+      {:error, reason} -> {:error, ErrorHelper.friendly_error(inspect(reason))}
     end
   rescue
-    e -> {:error, Exception.message(e)}
+    e -> {:error, ErrorHelper.friendly_error(Exception.message(e))}
   end
 
   defp extract_content(content) when is_binary(content), do: content
