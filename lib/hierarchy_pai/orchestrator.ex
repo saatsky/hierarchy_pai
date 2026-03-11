@@ -88,11 +88,12 @@ defmodule HierarchyPai.Orchestrator do
   end
 
   # Re-run only the aggregation with previously collected results.
-  @spec reaggregate(String.t(), list(), map(), String.t()) :: :ok
-  def reaggregate(goal, step_results, provider_config, pubsub_topic) do
+  # skipped_steps: optional list of %{"id" => id, "title" => title} for steps that failed/were skipped.
+  @spec reaggregate(String.t(), list(), map(), String.t(), list()) :: :ok
+  def reaggregate(goal, step_results, provider_config, pubsub_topic, skipped_steps \\ []) do
     broadcast(pubsub_topic, :aggregating_started)
 
-    case Aggregator.aggregate(goal, step_results, provider_config, pubsub_topic) do
+    case Aggregator.aggregate(goal, step_results, provider_config, pubsub_topic, skipped_steps) do
       {:ok, answer} -> broadcast(pubsub_topic, {:answer_ready, answer})
       {:error, reason} -> broadcast(pubsub_topic, {:error, reason})
     end

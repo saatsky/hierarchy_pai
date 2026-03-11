@@ -5,6 +5,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
   alias HierarchyPai.Agents.AgentRegistry
   alias HierarchyPai.ProviderStore
   alias HierarchyPai.SkillStore
+  alias HierarchyPai.RunStore
 
   @providers [
     {"Jan.ai (local)", :jan_ai},
@@ -22,6 +23,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(HierarchyPai.PubSub, pubsub_topic)
+      Phoenix.PubSub.subscribe(HierarchyPai.PubSub, "mcp_runs")
       # Auto-check Jan.ai on connect
       send(self(), :fetch_local_models)
     end
@@ -68,7 +70,8 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:saved_providers, ProviderStore.list())
      |> assign(:provider_form, nil)
      |> assign(:planner_provider_id, pick_default_provider_id(ProviderStore.list()))
-     |> assign(:redo_confirm, nil)}
+     |> assign(:redo_confirm, nil)
+     |> assign(:mcp_runs, RunStore.list())}
   end
 
   @impl true
@@ -678,7 +681,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
     # Override agent_type and skill_id on the plan for the redo step
     plan =
-      update_in(socket.assigns.plan["steps"], fn steps ->
+      update_in(socket.assigns.plan, ["steps"], fn steps ->
         Enum.map(steps, fn step ->
           if step["id"] == step_id do
             step
@@ -834,14 +837,55 @@ defmodule HierarchyPaiWeb.PlannerLive do
   @impl true
   def handle_event("skip_and_aggregate", _params, socket) do
     goal = get_in(socket.assigns.plan, ["goal"]) || ""
-    step_results = socket.assigns.step_results
+    all_steps = get_in(socket.assigns.plan, ["steps"]) || []
+
+    done_ids =
+      socket.assigns.step_statuses
+      |> Enum.filter(fn {_id, s} -> s == :done end)
+      |> MapSet.new(fn {id, _} -> id end)
+
+    # Build step_results from @step_outputs for steps that completed in this run,
+    # merging with any already-accumulated results (e.g. from a prior retry wave).
+    accumulated = socket.assigns.step_results || []
+    accumulated_ids = MapSet.new(accumulated, & &1["step_id"])
+
+    fresh_results =
+      all_steps
+      |> Enum.filter(fn step ->
+        MapSet.member?(done_ids, step["id"]) and
+          not MapSet.member?(accumulated_ids, step["id"])
+      end)
+      |> Enum.map(fn step ->
+        %{
+          "step_id" => step["id"],
+          "title" => step["title"],
+          "output" => Map.get(socket.assigns.step_outputs, step["id"], "")
+        }
+      end)
+
+    step_results = accumulated ++ fresh_results
+
+    # Collect failed/skipped steps so the aggregator can acknowledge them.
+    skipped_steps =
+      all_steps
+      |> Enum.filter(fn step ->
+        status = Map.get(socket.assigns.step_statuses, step["id"])
+        status in [:error, :pending, nil]
+      end)
+
     provider_config = build_provider_config(socket.assigns)
     topic = socket.assigns.pubsub_topic
 
     {:ok, _pid} =
       Task.start(fn ->
         try do
-          HierarchyPai.Orchestrator.reaggregate(goal, step_results, provider_config, topic)
+          HierarchyPai.Orchestrator.reaggregate(
+            goal,
+            step_results,
+            provider_config,
+            topic,
+            skipped_steps
+          )
         rescue
           e ->
             Phoenix.PubSub.broadcast(
@@ -1094,6 +1138,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:skills_sync_result, {:error, reason})}
   end
 
+  def handle_info({:run_store, {:mcp_run_updated, _run}}, socket) do
+    {:noreply, assign(socket, :mcp_runs, RunStore.list())}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # ── Helpers ────────────────────────────────────────────────────────────────
@@ -1221,6 +1269,22 @@ defmodule HierarchyPaiWeb.PlannerLive do
   def render(assigns) do
     ~H"""
     <div id="download-hook" phx-hook=".DownloadFile"></div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".MCPCopy">
+      export default {
+        mounted() {
+          this.el.addEventListener("click", () => {
+            const url = this.el.dataset.url;
+            navigator.clipboard.writeText(url).then(() => {
+              const icon = this.el.querySelector("svg");
+              if (icon) {
+                icon.style.color = "#34d399";
+                setTimeout(() => { icon.style.color = ""; }, 1500);
+              }
+            });
+          });
+        }
+      }
+    </script>
     <script :type={Phoenix.LiveView.ColocatedHook} name=".DownloadFile">
       export default {
         mounted() {
@@ -1366,7 +1430,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <%= if @saved_providers == [] do %>
                   <%!-- Empty state: no providers configured --%>
                   <div class="rounded-xl border border-dashed border-base-content/20 p-5 flex flex-col items-center text-center gap-3">
-                    <div class="w-10 h-10 rounded-xl bg-violet-600/10 border border-violet-700/30 flex items-center justify-center">
+                    <div class="w-10 h-10 rounded-xl bg-violet-100 border border-violet-300 dark:bg-violet-600/10 dark:border-violet-700/30 flex items-center justify-center">
                       <.icon name="hero-bolt" class="w-5 h-5 text-violet-500" />
                     </div>
                     <div>
@@ -1441,7 +1505,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
                     <.icon name="hero-bookmark" class="w-3.5 h-3.5 text-violet-400" /> Saved Providers
                     <%= if @saved_providers != [] do %>
-                      <span class="ml-1 bg-violet-600/30 text-violet-300 text-xs px-1.5 py-0.5 rounded-full">
+                      <span class="ml-1 bg-violet-100 text-violet-700 dark:bg-violet-600/30 dark:text-violet-300 text-xs px-1.5 py-0.5 rounded-full">
                         {length(@saved_providers)}
                       </span>
                     <% end %>
@@ -1595,7 +1659,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
                     <.icon name="hero-academic-cap" class="w-3.5 h-3.5 text-teal-400" /> Agent Skills
                     <%= if @saved_skills != [] do %>
-                      <span class="ml-1 bg-teal-600/30 text-teal-300 text-xs px-1.5 py-0.5 rounded-full">
+                      <span class="ml-1 bg-teal-100 text-teal-700 dark:bg-teal-600/30 dark:text-teal-300 text-xs px-1.5 py-0.5 rounded-full">
                         {length(@saved_skills)}
                       </span>
                     <% end %>
@@ -1620,8 +1684,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   <div class={[
                     "rounded-lg px-3 py-2 text-xs flex items-start gap-2",
                     if(kind == :ok,
-                      do: "bg-teal-900/30 border border-teal-700/40 text-teal-300",
-                      else: "bg-red-900/30 border border-red-700/40 text-red-300"
+                      do:
+                        "bg-teal-50 border border-teal-300 text-teal-700 dark:bg-teal-900/30 dark:border-teal-700/40 dark:text-teal-300",
+                      else:
+                        "bg-red-50 border border-red-300 text-red-700 dark:bg-red-900/30 dark:border-red-700/40 dark:text-red-300"
                     )
                   ]}>
                     <.icon
@@ -1646,10 +1712,17 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         <span class={[
                           "text-xs px-1.5 py-0.5 rounded font-mono shrink-0",
                           case skill.type do
-                            "research" -> "bg-blue-900/40 text-blue-300"
-                            "content" -> "bg-amber-900/40 text-amber-300"
-                            "engineering" -> "bg-purple-900/40 text-purple-300"
-                            _ -> "bg-base-100/60 text-base-content/60"
+                            "research" ->
+                              "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+
+                            "content" ->
+                              "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+
+                            "engineering" ->
+                              "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+
+                            _ ->
+                              "bg-base-100/60 text-base-content/60"
                           end
                         ]}>
                           {skill.type}
@@ -1686,12 +1759,96 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 </p>
               </div>
 
+              <%!-- MCP Server panel --%>
+              <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
+                    <.icon name="hero-cpu-chip" class="w-3.5 h-3.5 text-purple-400" /> MCP Server
+                    <span class="inline-flex items-center gap-1 ml-1 bg-emerald-100 text-emerald-700 dark:bg-emerald-600/20 dark:text-emerald-400 text-xs px-1.5 py-0.5 rounded-full">
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse">
+                      </span>
+                      Active
+                    </span>
+                  </p>
+                </div>
+
+                <%!-- Endpoint URL --%>
+                <div class="space-y-1">
+                  <p class="text-xs text-base-content/50">Endpoint</p>
+                  <div class="flex items-center gap-2">
+                    <code class="flex-1 text-xs bg-base-100/60 border border-base-300/40 rounded-lg px-2.5 py-1.5 text-purple-700 dark:text-purple-300 font-mono truncate">
+                      http://localhost:4000/mcp
+                    </code>
+                    <button
+                      id="mcp-copy-btn"
+                      phx-hook=".MCPCopy"
+                      data-url="http://localhost:4000/mcp"
+                      class="shrink-0 p-1.5 rounded-lg hover:bg-base-100/60 text-base-content/40 hover:text-base-content/80 transition-colors"
+                      title="Copy endpoint URL"
+                    >
+                      <.icon name="hero-clipboard" class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <%!-- Recent MCP runs --%>
+                <%= if @mcp_runs != [] do %>
+                  <div class="space-y-1">
+                    <p class="text-xs text-base-content/50">Recent runs</p>
+                    <%= for run <- Enum.take(@mcp_runs, 5) do %>
+                      <div class="flex items-center gap-2 py-1.5 border-b border-base-300/20 last:border-0">
+                        <span class={[
+                          "w-1.5 h-1.5 rounded-full shrink-0",
+                          case run.status do
+                            :done -> "bg-emerald-400"
+                            :error -> "bg-red-400"
+                            _ -> "bg-amber-400 animate-pulse"
+                          end
+                        ]}>
+                        </span>
+                        <p
+                          class="flex-1 min-w-0 text-xs text-base-content/70 truncate"
+                          title={run.task}
+                        >
+                          {run.task}
+                        </p>
+                        <span class={[
+                          "text-xs px-1.5 py-0.5 rounded font-mono shrink-0",
+                          case run.status do
+                            :done ->
+                              "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+
+                            :error ->
+                              "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+
+                            :planning ->
+                              "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+
+                            :executing ->
+                              "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+
+                            _ ->
+                              "bg-base-100/60 text-base-content/50"
+                          end
+                        ]}>
+                          {run.status}
+                        </span>
+                      </div>
+                    <% end %>
+                  </div>
+                <% else %>
+                  <p class="text-xs text-base-content/40 text-center py-2">
+                    No MCP runs yet. Connect a client to <code class="text-purple-400">POST /mcp</code>.
+                  </p>
+                <% end %>
+              </div>
+
               <%!-- About card --%>
               <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-5 text-xs text-base-content/50 space-y-2">
                 <p class="font-medium text-base-content/60">How it works</p>
                 <div class="space-y-1.5">
                   <div class="flex items-start gap-2">
-                    <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                    <span class="w-5 h-5 rounded-full bg-violet-600 text-white text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
                       1
                     </span>
                     <span>
@@ -1700,7 +1857,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                     </span>
                   </div>
                   <div class="flex items-start gap-2">
-                    <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                    <span class="w-5 h-5 rounded-full bg-violet-600 text-white text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
                       2
                     </span>
                     <span>
@@ -1709,7 +1866,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                     </span>
                   </div>
                   <div class="flex items-start gap-2">
-                    <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                    <span class="w-5 h-5 rounded-full bg-violet-600 text-white text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
                       3
                     </span>
                     <span>
@@ -1718,7 +1875,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                     </span>
                   </div>
                   <div class="flex items-start gap-2">
-                    <span class="w-5 h-5 rounded-full bg-violet-600/30 text-violet-400 text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                    <span class="w-5 h-5 rounded-full bg-violet-600 text-white text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
                       4
                     </span>
                     <span>
@@ -1735,19 +1892,19 @@ defmodule HierarchyPaiWeb.PlannerLive do
             <div class="space-y-5 min-w-0">
               <%!-- Error banner --%>
               <%= if @error do %>
-                <div class="bg-red-900/30 border border-red-700/50 rounded-xl p-4 flex items-start gap-3">
+                <div class="bg-red-50 border border-red-300 dark:bg-red-900/30 dark:border-red-700/50 rounded-xl p-4 flex items-start gap-3">
                   <.icon
                     name="hero-exclamation-triangle"
-                    class="w-5 h-5 text-red-400 shrink-0 mt-0.5"
+                    class="w-5 h-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5"
                   />
-                  <p class="text-sm text-red-300">{@error}</p>
+                  <p class="text-sm text-red-700 dark:text-red-300">{@error}</p>
                 </div>
               <% end %>
 
               <%!-- Idle placeholder --%>
               <%= if @status == :idle do %>
                 <div class="bg-base-200/30 border border-base-300/30 rounded-2xl p-12 flex flex-col items-center text-center gap-4">
-                  <div class="w-16 h-16 rounded-2xl bg-violet-600/10 border border-violet-700/30 flex items-center justify-center">
+                  <div class="w-16 h-16 rounded-2xl bg-violet-100 border border-violet-300 dark:bg-violet-600/10 dark:border-violet-700/30 flex items-center justify-center">
                     <.icon name="hero-cpu-chip" class="w-8 h-8 text-violet-500" />
                   </div>
                   <div>
@@ -1772,7 +1929,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <div class="bg-base-200/60 border border-base-300/50 rounded-2xl p-6 space-y-4">
                   <div class="flex items-center justify-between">
                     <div class="flex items-center gap-3">
-                      <div class="w-8 h-8 rounded-lg bg-violet-600/20 flex items-center justify-center">
+                      <div class="w-8 h-8 rounded-lg bg-violet-100 dark:bg-violet-100 dark:bg-violet-600/20 flex items-center justify-center">
                         <.icon name="hero-arrow-path" class="w-4 h-4 text-violet-400 animate-spin" />
                       </div>
                       <div>
@@ -1784,7 +1941,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                     </div>
                     <button
                       phx-click="cancel"
-                      class="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-900/30 hover:bg-red-800/40 text-red-400 border border-red-700/40 transition-colors"
+                      class="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-300 dark:bg-red-900/30 dark:hover:bg-red-800/40 dark:text-red-400 dark:border-red-700/40 transition-colors"
                     >
                       Cancel
                     </button>
@@ -1823,15 +1980,15 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       </button>
                       <button
                         phx-click="accept_all_steps"
-                        class="px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600/30 hover:bg-violet-600/40 text-violet-300 border border-violet-700/40 transition-colors"
+                        class="px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-100 hover:bg-violet-200 text-violet-700 border border-violet-300 dark:bg-violet-600/30 dark:hover:bg-violet-600/40 dark:text-violet-300 dark:border-violet-700/40 transition-colors"
                       >
                         Accept All
                       </button>
                     </div>
                   </div>
 
-                  <div class="px-5 py-3 bg-violet-600/10 border-b border-base-300/30">
-                    <p class="text-xs font-medium text-violet-400 uppercase tracking-wider mb-1">
+                  <div class="px-5 py-3 bg-violet-50 border-b border-violet-200 dark:bg-violet-600/10 dark:border-base-300/30">
+                    <p class="text-xs font-medium text-violet-600 dark:text-violet-400 uppercase tracking-wider mb-1">
                       Goal
                     </p>
                     <p class="text-sm text-base-content/90">{@plan["goal"]}</p>
@@ -1840,7 +1997,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   <%= for {wave_num, wave_steps} <- compute_waves(@plan["steps"] || []) do %>
                     <div class="px-5 py-4 border-b border-base-300/30 last:border-0">
                       <div class="flex items-center gap-2 mb-3">
-                        <span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-indigo-600/20 text-indigo-400 border border-indigo-700/40">
+                        <span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-600/20 dark:text-indigo-400 dark:border-indigo-700/40">
                           Wave {wave_num}
                         </span>
                         <span class="text-xs text-base-content/50">
@@ -1989,7 +2146,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                   </span>
                                   <select
                                     name="agent_type"
-                                    class="flex-1 bg-base-300 border border-indigo-700/50 rounded text-xs text-indigo-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                    class="flex-1 bg-base-300 border border-indigo-400 rounded text-xs text-base-content dark:border-indigo-700/50 dark:text-indigo-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                                   >
                                     <%= for {label, val, icon} <- AgentRegistry.agents() do %>
                                       <option
@@ -2014,7 +2171,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                     <span class="text-xs text-base-content/50 shrink-0">Skill:</span>
                                     <select
                                       name="skill_id"
-                                      class="flex-1 bg-base-300 border border-teal-700/50 rounded text-xs text-teal-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                      class="flex-1 bg-base-300 border border-teal-400 rounded text-xs text-base-content dark:border-teal-700/50 dark:text-teal-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-teal-500"
                                     >
                                       <option value="">— default specialist —</option>
                                       <%= for skill <- @saved_skills do %>
@@ -2057,9 +2214,14 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <div class={[
                   "border rounded-2xl overflow-hidden backdrop-blur-sm",
                   cond do
-                    @status == :step_failed -> "bg-orange-950/20 border-orange-700/40"
-                    @status in [:done, :review_answer] -> "bg-emerald-950/20 border-emerald-700/30"
-                    true -> "bg-base-200/60 border-base-300/50"
+                    @status == :step_failed ->
+                      "bg-orange-50 border-orange-300 dark:bg-orange-950/20 dark:border-orange-700/40"
+
+                    @status in [:done, :review_answer] ->
+                      "bg-emerald-50 border-emerald-300 dark:bg-emerald-950/20 dark:border-emerald-700/30"
+
+                    true ->
+                      "bg-base-200/60 border-base-300/50"
                   end
                 ]}>
                   <div class="px-5 py-4 border-b border-base-300/50 flex items-center gap-2">
@@ -2067,11 +2229,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
                     <h2 class="font-semibold text-base-content/90">Execution Board</h2>
                     <%= cond do %>
                       <% @status == :step_failed -> %>
-                        <span class="text-xs px-2 py-0.5 rounded-full bg-orange-600/20 text-orange-400 border border-orange-700/40">
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-300 dark:bg-orange-600/20 dark:text-orange-400 dark:border-orange-700/40">
                           Action required
                         </span>
                       <% @status in [:done, :review_answer] -> %>
-                        <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-600/20 text-emerald-400 border border-emerald-700/40">
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-300 dark:bg-emerald-600/20 dark:text-emerald-400 dark:border-emerald-700/40">
                           Completed — click any done step to redo
                         </span>
                       <% true -> %>
@@ -2149,8 +2311,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
                           <div class={[
                             "@container border rounded-lg p-3",
                             if(empty_output?,
-                              do: "bg-amber-900/10 border-amber-700/40",
-                              else: "bg-emerald-600/10 border-emerald-700/40"
+                              do:
+                                "bg-amber-50 border-amber-300 dark:bg-amber-900/10 dark:border-amber-700/40",
+                              else:
+                                "bg-emerald-50 border-emerald-300 dark:bg-emerald-600/10 dark:border-emerald-700/40"
                             )
                           ]}>
                             <div class="flex items-center gap-1.5 mb-1">
@@ -2196,9 +2360,9 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                   "flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
                                   if(empty_output?,
                                     do:
-                                      "bg-amber-700/40 hover:bg-amber-600/50 text-amber-300 hover:text-amber-200",
+                                      "bg-amber-100 hover:bg-amber-200 text-amber-700 dark:bg-amber-700/40 dark:hover:bg-amber-600/50 dark:text-amber-300 dark:hover:text-amber-200",
                                     else:
-                                      "bg-violet-700/40 hover:bg-violet-600/50 text-violet-300 hover:text-violet-200"
+                                      "bg-violet-100 hover:bg-violet-200 text-violet-700 dark:bg-violet-700/40 dark:hover:bg-violet-600/50 dark:text-violet-300 dark:hover:text-violet-200"
                                   )
                                 ]}
                               >
@@ -2217,19 +2381,24 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       </h3>
                       <div class="space-y-2">
                         <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :error) do %>
-                          <div class="bg-red-600/10 border border-red-700/40 rounded-lg p-3 space-y-1.5">
+                          <div class="bg-red-50 border border-red-300 dark:bg-red-600/10 dark:border-red-700/40 rounded-lg p-3 space-y-1.5">
                             <div class="flex items-center gap-1.5">
-                              <.icon name="hero-x-circle" class="w-3 h-3 text-red-400 shrink-0" />
-                              <p class="text-xs font-bold text-red-400">#{step["id"]}</p>
+                              <.icon
+                                name="hero-x-circle"
+                                class="w-3 h-3 text-red-500 dark:text-red-400 shrink-0"
+                              />
+                              <p class="text-xs font-bold text-red-600 dark:text-red-400">
+                                #{step["id"]}
+                              </p>
                             </div>
                             <p class="text-xs font-medium text-base-content/80 leading-snug">
                               {step["title"]}
                             </p>
-                            <p class="text-xs text-red-400/60 truncate">
+                            <p class="text-xs text-red-500/70 dark:text-red-400/60 truncate">
                               {AgentRegistry.label_for(step["agent_type"] || "executor")}
                             </p>
                             <%= if reason = Map.get(@step_errors, step["id"]) do %>
-                              <p class="text-xs text-red-400/80 font-mono leading-snug bg-red-900/20 rounded px-1.5 py-1 break-all">
+                              <p class="text-xs text-red-700 dark:text-red-400/80 font-mono leading-snug bg-red-100 dark:bg-red-900/20 rounded px-1.5 py-1 break-all">
                                 {reason}
                               </p>
                             <% end %>
@@ -2240,9 +2409,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   </div>
                   <%!-- Action panel shown when wave has failed steps --%>
                   <%= if @status == :step_failed do %>
-                    <div class="px-5 py-4 border-t border-orange-700/30 bg-orange-950/20 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                    <div class="px-5 py-4 border-t border-orange-200 bg-orange-50 dark:border-orange-700/30 dark:bg-orange-950/20 flex flex-col sm:flex-row items-start sm:items-center gap-3">
                       <div class="flex-1">
-                        <p class="text-sm font-semibold text-orange-300">One or more steps failed</p>
+                        <p class="text-sm font-semibold text-orange-700 dark:text-orange-300">
+                          One or more steps failed
+                        </p>
                         <p class="text-xs text-base-content/60 mt-0.5">
                           Retry the failed steps, skip them and aggregate what succeeded, or cancel.
                         </p>
@@ -2256,7 +2427,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         </button>
                         <button
                           phx-click="skip_and_aggregate"
-                          disabled={@step_results == []}
+                          disabled={not Enum.any?(@step_statuses, fn {_id, s} -> s == :done end)}
                           class="px-4 py-2 text-xs font-semibold rounded-lg bg-indigo-600/70 hover:bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
                         >
                           <.icon name="hero-forward" class="w-3.5 h-3.5" /> Skip &amp; aggregate
@@ -2357,7 +2528,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <div class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/60 backdrop-blur-sm">
                   <div class="bg-base-200 border border-violet-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
                     <div class="px-6 py-5 border-b border-base-300/50 flex items-center gap-3">
-                      <div class="w-8 h-8 rounded-lg bg-violet-600/20 flex items-center justify-center">
+                      <div class="w-8 h-8 rounded-lg bg-violet-100 dark:bg-violet-600/20 flex items-center justify-center">
                         <.icon name="hero-arrow-path" class="w-4 h-4 text-violet-400" />
                       </div>
                       <h3 class="font-semibold text-base-content/90">Redo step?</h3>
@@ -2372,8 +2543,8 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       <p class="text-sm text-base-content/80">
                         You are about to re-run:
                       </p>
-                      <div class="bg-violet-900/20 border border-violet-700/40 rounded-lg p-3">
-                        <p class="text-xs font-bold text-violet-400 mb-0.5">
+                      <div class="bg-violet-50 border border-violet-300 dark:bg-violet-900/20 dark:border-violet-700/40 rounded-lg p-3">
+                        <p class="text-xs font-bold text-violet-600 dark:text-violet-400 mb-0.5">
                           #{redo_step && redo_step["id"]}
                         </p>
                         <p class="text-sm font-medium text-base-content/90">
@@ -2393,7 +2564,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                           <span class="text-xs text-base-content/50 shrink-0 w-20">Specialist:</span>
                           <select
                             name="agent_type"
-                            class="flex-1 bg-base-300 border border-indigo-700/50 rounded text-xs text-indigo-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            class="flex-1 bg-base-300 border border-indigo-400 rounded text-xs text-base-content dark:border-indigo-700/50 dark:text-indigo-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                           >
                             <%= for {label, val, icon} <- AgentRegistry.agents() do %>
                               <option value={val} selected={@redo_confirm.redo_agent_type == val}>
@@ -2411,7 +2582,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                             <span class="text-xs text-base-content/50 shrink-0 w-20">Skill:</span>
                             <select
                               name="skill_id"
-                              class="flex-1 bg-base-300 border border-teal-700/50 rounded text-xs text-teal-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                              class="flex-1 bg-base-300 border border-teal-400 rounded text-xs text-base-content dark:border-teal-700/50 dark:text-teal-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500"
                             >
                               <option value="">— default specialist —</option>
                               <%= for skill <- @saved_skills do %>
@@ -2434,13 +2605,15 @@ defmodule HierarchyPaiWeb.PlannerLive do
                           </p>
                           <div class="space-y-1.5">
                             <%= for s <- also_steps do %>
-                              <div class="bg-amber-900/15 border border-amber-700/30 rounded-lg px-3 py-2 flex items-center gap-2">
+                              <div class="bg-amber-50 border border-amber-200 dark:bg-amber-900/15 dark:border-amber-700/30 rounded-lg px-3 py-2 flex items-center gap-2">
                                 <.icon
                                   name="hero-arrow-right"
-                                  class="w-3 h-3 text-amber-500 shrink-0"
+                                  class="w-3 h-3 text-amber-600 dark:text-amber-500 shrink-0"
                                 />
                                 <p class="text-xs text-base-content/80">
-                                  <span class="font-bold text-amber-400">#{s["id"]}</span>
+                                  <span class="font-bold text-amber-600 dark:text-amber-400">
+                                    #{s["id"]}
+                                  </span>
                                   — {s["title"]}
                                 </p>
                               </div>
@@ -2473,7 +2646,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
               <%!-- Aggregating indicator --%>
               <%= if @status == :aggregating and @final_stream == "" do %>
                 <div class="bg-base-200/60 border border-base-300/50 rounded-2xl p-6 flex items-center gap-4 backdrop-blur-sm">
-                  <div class="w-10 h-10 rounded-xl bg-indigo-600/20 flex items-center justify-center shrink-0">
+                  <div class="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-600/20 flex items-center justify-center shrink-0">
                     <.icon name="hero-arrow-path" class="w-5 h-5 text-indigo-400 animate-spin" />
                   </div>
                   <div class="flex-1">
@@ -2494,8 +2667,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
               <%!-- Aggregating streaming preview --%>
               <%= if @status == :aggregating and @final_stream != "" do %>
                 <div class="bg-base-200/60 border border-indigo-700/40 rounded-2xl overflow-hidden backdrop-blur-sm">
-                  <div class="px-5 py-4 border-b border-indigo-700/30 bg-indigo-600/10 flex items-center gap-2">
-                    <.icon name="hero-sparkles" class="w-4 h-4 text-indigo-400 animate-pulse" />
+                  <div class="px-5 py-4 border-b border-indigo-300 bg-indigo-50 dark:border-indigo-700/30 dark:bg-indigo-600/10 flex items-center gap-2">
+                    <.icon
+                      name="hero-sparkles"
+                      class="w-4 h-4 text-indigo-500 dark:text-indigo-400 animate-pulse"
+                    />
                     <h2 class="font-semibold text-base-content/90">Synthesising&hellip;</h2>
                     <button
                       phx-click="cancel"
@@ -2517,7 +2693,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
               <%!-- Review Answer --%>
               <%= if @status == :review_answer and @final_answer do %>
                 <div class="bg-base-200/60 border border-indigo-700/40 rounded-2xl overflow-hidden backdrop-blur-sm shadow-lg shadow-indigo-900/10">
-                  <div class="px-5 py-4 border-b border-indigo-700/30 bg-indigo-600/10 flex items-center gap-2">
+                  <div class="px-5 py-4 border-b border-indigo-300 bg-indigo-50 dark:border-indigo-700/30 dark:bg-indigo-600/10 flex items-center gap-2">
                     <.icon name="hero-sparkles" class="w-4 h-4 text-indigo-400" />
                     <h2 class="font-semibold text-base-content/90">Final Answer</h2>
                     <span class="ml-auto text-xs text-base-content/60">Review before accepting</span>
@@ -2563,10 +2739,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
               <%!-- Done: accepted final answer --%>
               <%= if @status == :done and @final_answer do %>
                 <div class="bg-base-200/60 border border-emerald-700/40 rounded-2xl overflow-hidden backdrop-blur-sm shadow-lg shadow-emerald-900/10">
-                  <div class="px-5 py-4 border-b border-emerald-700/30 bg-emerald-600/10 flex items-center gap-2">
+                  <div class="px-5 py-4 border-b border-emerald-300 bg-emerald-50 dark:border-emerald-700/30 dark:bg-emerald-600/10 flex items-center gap-2">
                     <.icon name="hero-check-badge" class="w-4 h-4 text-emerald-400" />
                     <h2 class="font-semibold text-base-content/90">Final Answer</h2>
-                    <span class="ml-auto text-xs px-2 py-0.5 rounded-full bg-emerald-600/20 text-emerald-400 font-medium border border-emerald-700/40">
+                    <span class="ml-auto text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium border border-emerald-300 dark:bg-emerald-600/20 dark:text-emerald-400 dark:border-emerald-700/40">
                       Accepted
                     </span>
                   </div>
@@ -2614,28 +2790,37 @@ defmodule HierarchyPaiWeb.PlannerLive do
   defp status_label(:done), do: "Done"
   defp status_label(:error), do: "Error"
 
-  defp status_badge_class(:idle), do: "bg-base-100 text-base-content/80"
+  defp status_badge_class(:idle), do: "bg-base-300 text-base-content/80"
 
   defp status_badge_class(:planning),
-    do: "bg-yellow-600/20 text-yellow-400 border border-yellow-700/40"
+    do:
+      "bg-yellow-100 text-yellow-700 border border-yellow-300 dark:bg-yellow-600/20 dark:text-yellow-400 dark:border-yellow-700/40"
 
   defp status_badge_class(:review_plan),
-    do: "bg-amber-600/20 text-amber-400 border border-amber-700/40"
+    do:
+      "bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-600/20 dark:text-amber-400 dark:border-amber-700/40"
 
   defp status_badge_class(:executing),
-    do: "bg-violet-600/20 text-violet-400 border border-violet-700/40"
+    do:
+      "bg-violet-100 text-violet-700 border border-violet-300 dark:bg-violet-600/20 dark:text-violet-400 dark:border-violet-700/40"
 
   defp status_badge_class(:aggregating),
-    do: "bg-indigo-600/20 text-indigo-400 border border-indigo-700/40"
+    do:
+      "bg-indigo-100 text-indigo-700 border border-indigo-300 dark:bg-indigo-600/20 dark:text-indigo-400 dark:border-indigo-700/40"
 
   defp status_badge_class(:review_answer),
-    do: "bg-cyan-600/20 text-cyan-400 border border-cyan-700/40"
+    do:
+      "bg-cyan-100 text-cyan-700 border border-cyan-300 dark:bg-cyan-600/20 dark:text-cyan-400 dark:border-cyan-700/40"
 
   defp status_badge_class(:done),
-    do: "bg-emerald-600/20 text-emerald-400 border border-emerald-700/40"
+    do:
+      "bg-emerald-100 text-emerald-700 border border-emerald-300 dark:bg-emerald-600/20 dark:text-emerald-400 dark:border-emerald-700/40"
 
   defp status_badge_class(:step_failed),
-    do: "bg-orange-600/20 text-orange-400 border border-orange-700/40"
+    do:
+      "bg-orange-100 text-orange-700 border border-orange-300 dark:bg-orange-600/20 dark:text-orange-400 dark:border-orange-700/40"
 
-  defp status_badge_class(:error), do: "bg-red-600/20 text-red-400 border border-red-700/40"
+  defp status_badge_class(:error),
+    do:
+      "bg-red-100 text-red-700 border border-red-300 dark:bg-red-600/20 dark:text-red-400 dark:border-red-700/40"
 end

@@ -21,6 +21,7 @@ Hierarchical Planner AI decomposes a complex task into parallel, dependency-awar
 - **Light / dark theme** — toggle between light and dark mode; preference persisted in localStorage
 - **Configurable retries** — tune LangChain chain-level retries to balance speed vs reliability
 - **Docker-ready** — single `docker compose up --build` to run anywhere
+- **MCP Server** — expose the full pipeline as an MCP endpoint (`POST /mcp`); any MCP-compatible agent (Jan.ai, VS Code, Claude Desktop) can call `run_task`, `plan_task`, `execute_plan`, `list_specialists`, and `list_skills`
 
 ---
 
@@ -202,6 +203,58 @@ mix assets.deploy     # build production assets
 | [Agent Skills](doc/skills.md) | SKILL.md format, seed skills, adding new skills via PR |
 | [Task Examples](doc/examples.md) | Sample prompts with expected outputs and agent assignments |
 | [Troubleshooting](doc/troubleshooting.md) | Common errors and how to fix them |
+| [MCP Server API](priv/TOOLS.md) | MCP endpoint, all 5 tools, request/response schemas |
+
+---
+
+## 🔌 MCP Server
+
+hierarchy_pai exposes its full planning pipeline as an MCP server at:
+
+```
+POST http://localhost:4000/mcp
+```
+
+Any MCP-compatible client (Jan.ai, VS Code Copilot, Claude Desktop, Cursor) can call the 5 tools
+to delegate complex tasks: the pipeline decomposes them into parallel specialist steps, executes
+them concurrently, and returns a synthesised final answer.
+
+### Available tools
+
+| Tool | Phase | Description |
+|------|-------|-------------|
+| `run_task` | Full pipeline | Plan → parallel execution → synthesised answer in one call |
+| `plan_task` | Plan only | Generate a structured plan for review; execute separately with `execute_plan` |
+| `execute_plan` | Execute only | Run a plan object produced by `plan_task` |
+| `list_specialists` | Discovery | List the 12 available specialist agent types |
+| `list_skills` | Discovery | List loaded SKILL.md methodology packs |
+
+### Two-step workflow (recommended)
+
+```
+1. plan   = plan_task(task="...", provider="my-provider")
+2. review plan.steps — check agent assignments, step count, instructions
+3. result = execute_plan(task="...", plan=plan, provider="my-provider")
+```
+
+### Client setup
+
+**Jan.ai** — Settings → MCP Servers → Add server, URL `http://localhost:4000/mcp`, Transport `Streamable HTTP`
+
+**VS Code Copilot** — add to `.vscode/mcp.json`:
+```json
+{ "servers": { "hierarchy_pai": { "type": "http", "url": "http://localhost:4000/mcp" } } }
+```
+
+**Claude Desktop** — add `mcp-remote` bridge in `claude_desktop_config.json`:
+```json
+{ "mcpServers": { "hierarchy_pai": { "command": "npx", "args": ["-y", "mcp-remote", "http://localhost:4000/mcp"] } } }
+```
+
+See [`priv/TOOLS.md`](priv/TOOLS.md) for full schema reference, response shapes, error handling, and rate-limit guidance.
+
+The MCP server is implemented with **ash_ai** (`AshAi.Mcp.Router`), using a Plug-based
+transport (no GenServer — no timeout issues for long-running pipelines).
 
 ---
 

@@ -64,7 +64,8 @@ config :spark,
   ]
 
 config :hierarchy_pai,
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  ash_domains: [HierarchyPai.Pipeline]
 
 # Configure the endpoint
 config :hierarchy_pai, HierarchyPaiWeb.Endpoint,

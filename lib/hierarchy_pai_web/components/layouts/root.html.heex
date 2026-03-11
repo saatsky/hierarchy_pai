@@ -14,20 +14,44 @@
     </script>
     <script>
       (() => {
-        const setTheme = (theme) => {
-          if (theme === "system") {
+        const darkMQ = window.matchMedia("(prefers-color-scheme: dark)");
+
+        const setTheme = (pref) => {
+          // Resolve "system" to the actual OS preference
+          const resolved = pref === "system"
+            ? (darkMQ.matches ? "dark" : "light")
+            : pref;
+
+          // Persist user preference (remove key when system so the storage
+          // listener can detect "system" via a null/missing key)
+          if (pref === "system") {
             localStorage.removeItem("phx:theme");
-            document.documentElement.removeAttribute("data-theme");
           } else {
-            localStorage.setItem("phx:theme", theme);
-            document.documentElement.setAttribute("data-theme", theme);
+            localStorage.setItem("phx:theme", pref);
           }
+
+          // Always set data-theme so daisyUI CSS vars AND Tailwind dark: variant
+          // both respond correctly in all three modes
+          document.documentElement.setAttribute("data-theme", resolved);
+          // Track user preference separately so the toggle indicator follows
+          // the user's choice (system/light/dark) rather than the resolved theme
+          document.documentElement.setAttribute("data-theme-pref", pref);
         };
-        if (!document.documentElement.hasAttribute("data-theme")) {
-          setTheme(localStorage.getItem("phx:theme") || "system");
-        }
-        window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
-        
+
+        // Apply on first load
+        setTheme(localStorage.getItem("phx:theme") || "system");
+
+        // Re-resolve when OS preference changes (only matters when pref is "system")
+        darkMQ.addEventListener("change", () => {
+          if (!localStorage.getItem("phx:theme")) setTheme("system");
+        });
+
+        // Sync across browser tabs
+        window.addEventListener("storage", (e) => {
+          if (e.key === "phx:theme") setTheme(e.newValue || "system");
+        });
+
+        // Theme toggle buttons
         window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));
       })();
     </script>
