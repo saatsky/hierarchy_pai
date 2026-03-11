@@ -215,25 +215,43 @@ hierarchy_pai exposes its full planning pipeline as an MCP server at:
 POST http://localhost:4000/mcp
 ```
 
-Any MCP-compatible client (Jan.ai, VS Code with MCP extension, Claude Desktop) can call it.
+Any MCP-compatible client (Jan.ai, VS Code Copilot, Claude Desktop, Cursor) can call the 5 tools
+to delegate complex tasks: the pipeline decomposes them into parallel specialist steps, executes
+them concurrently, and returns a synthesised final answer.
 
 ### Available tools
 
-| Tool | Description |
-|------|-------------|
-| `run_task` | Full pipeline: plan → parallel execution → synthesised answer |
-| `plan_task` | Generate a plan JSON without executing (for review/modification) |
-| `execute_plan` | Execute a plan JSON produced by `plan_task` |
-| `list_specialists` | Discover the 12 available specialist agents |
-| `list_skills` | Discover loaded SKILL.md skills |
+| Tool | Phase | Description |
+|------|-------|-------------|
+| `run_task` | Full pipeline | Plan → parallel execution → synthesised answer in one call |
+| `plan_task` | Plan only | Generate a structured plan for review; execute separately with `execute_plan` |
+| `execute_plan` | Execute only | Run a plan object produced by `plan_task` |
+| `list_specialists` | Discovery | List the 12 available specialist agent types |
+| `list_skills` | Discovery | List loaded SKILL.md methodology packs |
 
-### Quick example (Jan.ai)
+### Two-step workflow (recommended)
 
-1. Add a provider in the hierarchy_pai UI at `http://localhost:4000`
-2. In Jan.ai, add a new MCP server: **URL** `http://localhost:4000/mcp`, **Transport** `Streamable HTTP`
-3. Ask your agent to call `run_task` with your task text
+```
+1. plan   = plan_task(task="...", provider="my-provider")
+2. review plan.steps — check agent assignments, step count, instructions
+3. result = execute_plan(task="...", plan=plan, provider="my-provider")
+```
 
-See [`priv/TOOLS.md`](priv/TOOLS.md) for full schema documentation.
+### Client setup
+
+**Jan.ai** — Settings → MCP Servers → Add server, URL `http://localhost:4000/mcp`, Transport `Streamable HTTP`
+
+**VS Code Copilot** — add to `.vscode/mcp.json`:
+```json
+{ "servers": { "hierarchy_pai": { "type": "http", "url": "http://localhost:4000/mcp" } } }
+```
+
+**Claude Desktop** — add `mcp-remote` bridge in `claude_desktop_config.json`:
+```json
+{ "mcpServers": { "hierarchy_pai": { "command": "npx", "args": ["-y", "mcp-remote", "http://localhost:4000/mcp"] } } }
+```
+
+See [`priv/TOOLS.md`](priv/TOOLS.md) for full schema reference, response shapes, error handling, and rate-limit guidance.
 
 The MCP server is implemented with **ash_ai** (`AshAi.Mcp.Router`), using a Plug-based
 transport (no GenServer — no timeout issues for long-running pipelines).
