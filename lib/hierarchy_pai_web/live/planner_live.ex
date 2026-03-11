@@ -681,7 +681,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
     # Override agent_type and skill_id on the plan for the redo step
     plan =
-      update_in(socket.assigns.plan["steps"], fn steps ->
+      update_in(socket.assigns.plan, ["steps"], fn steps ->
         Enum.map(steps, fn step ->
           if step["id"] == step_id do
             step
