@@ -65,6 +65,19 @@ defmodule HierarchyPai.SkillStore do
     GenServer.call(__MODULE__, :sync_remote, 30_000)
   end
 
+  @doc """
+  Rescans the local `priv/skills/` directory and reloads all SKILL.md files
+  into ETS. Existing entries are updated in place; new entries are inserted.
+
+  Returns `{:ok, %{added: n, updated: n}}` with counts of newly added vs
+  updated skills, or `{:error, reason}` if the directory cannot be read.
+  """
+  @spec reload_local() ::
+          {:ok, %{added: non_neg_integer(), updated: non_neg_integer()}} | {:error, String.t()}
+  def reload_local do
+    GenServer.call(__MODULE__, :reload_local, 10_000)
+  end
+
   ## GenServer
 
   def start_link(_opts) do
@@ -81,6 +94,12 @@ defmodule HierarchyPai.SkillStore do
   @impl true
   def handle_call(:sync_remote, _from, state) do
     result = do_sync_remote()
+    {:reply, result, state}
+  end
+
+  @impl true
+  def handle_call(:reload_local, _from, state) do
+    result = do_reload_local()
     {:reply, result, state}
   end
 
@@ -118,6 +137,44 @@ defmodule HierarchyPai.SkillStore do
       {:ok, skill}
     else
       {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  defp do_reload_local do
+    skills_path = Application.app_dir(:hierarchy_pai, @skills_dir)
+
+    case File.ls(skills_path) do
+      {:ok, entries} ->
+        before_ids = MapSet.new(:ets.tab2list(@table), fn {id, _} -> id end)
+
+        results =
+          Enum.reduce(entries, %{added: 0, updated: 0}, fn entry, acc ->
+            skill_file = Path.join([skills_path, entry, "SKILL.md"])
+
+            if File.regular?(skill_file) do
+              case load_skill_file(entry, skill_file) do
+                {:ok, skill} ->
+                  already_existed = MapSet.member?(before_ids, skill.id)
+                  :ets.insert(@table, {skill.id, skill})
+                  Logger.info("[SkillStore] Reloaded skill: #{skill.id} (#{skill.name})")
+
+                  if already_existed,
+                    do: Map.update!(acc, :updated, &(&1 + 1)),
+                    else: Map.update!(acc, :added, &(&1 + 1))
+
+                {:error, reason} ->
+                  Logger.warning("[SkillStore] Skipped #{skill_file} on reload: #{reason}")
+                  acc
+              end
+            else
+              acc
+            end
+          end)
+
+        {:ok, results}
+
+      {:error, reason} ->
+        {:error, "Could not read skills directory: #{inspect(reason)}"}
     end
   end
 
