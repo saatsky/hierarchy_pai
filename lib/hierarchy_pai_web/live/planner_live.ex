@@ -57,7 +57,9 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:step_agent_types, %{})
      |> assign(:step_skills, %{})
      |> assign(:saved_skills, SkillStore.list())
+     |> assign(:skill_search, "")
      |> assign(:skills_syncing, false)
+     |> assign(:skills_reloading, false)
      |> assign(:skills_sync_result, nil)
      |> assign(:selected_step_id, nil)
      |> assign(:current_step_id, nil)
@@ -485,6 +487,23 @@ defmodule HierarchyPaiWeb.PlannerLive do
     end)
 
     {:noreply, assign(socket, :skills_syncing, true)}
+  end
+
+  @impl true
+  def handle_event("reload_local_skills", _params, socket) do
+    parent = self()
+
+    Task.start(fn ->
+      result = HierarchyPai.SkillStore.reload_local()
+      send(parent, {:skills_reload_done, result})
+    end)
+
+    {:noreply, assign(socket, :skills_reloading, true)}
+  end
+
+  @impl true
+  def handle_event("filter_skills", %{"value" => query}, socket) do
+    {:noreply, assign(socket, :skill_search, query)}
   end
 
   @impl true
@@ -1138,6 +1157,36 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:skills_sync_result, {:error, reason})}
   end
 
+  def handle_info({:skills_reload_done, {:ok, %{added: 0, updated: 0}}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:skills_reloading, false)
+     |> assign(:skills_sync_result, {:ok, "No changes — all local skills already up to date."})}
+  end
+
+  def handle_info({:skills_reload_done, {:ok, %{added: added, updated: updated}}}, socket) do
+    parts =
+      [
+        if(added > 0, do: "#{added} new", else: nil),
+        if(updated > 0, do: "#{updated} updated", else: nil)
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(", ")
+
+    {:noreply,
+     socket
+     |> assign(:skills_reloading, false)
+     |> assign(:saved_skills, SkillStore.list())
+     |> assign(:skills_sync_result, {:ok, "Local skills reloaded: #{parts}."})}
+  end
+
+  def handle_info({:skills_reload_done, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:skills_reloading, false)
+     |> assign(:skills_sync_result, {:error, reason})}
+  end
+
   def handle_info({:run_store, {:mcp_run_updated, _run}}, socket) do
     {:noreply, assign(socket, :mcp_runs, RunStore.list())}
   end
@@ -1655,6 +1704,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
               <%!-- Skills panel --%>
               <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
+                <%!-- Header row --%>
                 <div class="flex items-center justify-between">
                   <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
                     <.icon name="hero-academic-cap" class="w-3.5 h-3.5 text-teal-400" /> Agent Skills
@@ -1664,21 +1714,37 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       </span>
                     <% end %>
                   </p>
-                  <button
-                    phx-click="sync_skills"
-                    disabled={@skills_syncing}
-                    class="text-xs text-teal-400 hover:text-teal-300 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Check for new skills on GitHub"
-                  >
-                    <.icon
-                      name={if @skills_syncing, do: "hero-arrow-path", else: "hero-arrow-down-tray"}
-                      class={["w-3 h-3", if(@skills_syncing, do: "animate-spin")]}
-                    />
-                    {if @skills_syncing, do: "Syncing…", else: "Check for updates"}
-                  </button>
+                  <%!-- Action buttons row --%>
+                  <div class="flex items-center gap-2">
+                    <button
+                      phx-click="reload_local_skills"
+                      disabled={@skills_reloading}
+                      class="text-xs text-amber-500 hover:text-amber-400 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Reload skills from priv/skills/"
+                    >
+                      <.icon
+                        name={if @skills_reloading, do: "hero-arrow-path", else: "hero-arrow-path"}
+                        class={["w-3 h-3", if(@skills_reloading, do: "animate-spin")]}
+                      />
+                      {if @skills_reloading, do: "Reloading…", else: "Reload local"}
+                    </button>
+                    <span class="text-base-content/20">|</span>
+                    <button
+                      phx-click="sync_skills"
+                      disabled={@skills_syncing}
+                      class="text-xs text-teal-400 hover:text-teal-300 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Check for new skills on GitHub"
+                    >
+                      <.icon
+                        name={if @skills_syncing, do: "hero-arrow-path", else: "hero-arrow-down-tray"}
+                        class={["w-3 h-3", if(@skills_syncing, do: "animate-spin")]}
+                      />
+                      {if @skills_syncing, do: "Syncing…", else: "Check GitHub"}
+                    </button>
+                  </div>
                 </div>
 
-                <%!-- Sync result banner --%>
+                <%!-- Sync/reload result banner --%>
                 <%= if @skills_sync_result do %>
                   <% {kind, msg} = @skills_sync_result %>
                   <div class={[
@@ -1698,16 +1764,59 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   </div>
                 <% end %>
 
+                <%!-- Search input (only when skills exist) --%>
+                <%= if @saved_skills != [] do %>
+                  <div class="relative">
+                    <.icon
+                      name="hero-magnifying-glass"
+                      class="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-base-content/40 pointer-events-none"
+                    />
+                    <input
+                      type="text"
+                      value={@skill_search}
+                      phx-keyup="filter_skills"
+                      phx-change="filter_skills"
+                      name="value"
+                      placeholder="Search skills…"
+                      class="w-full bg-base-100 border border-base-300/50 rounded-lg pl-7 pr-3 py-1 text-xs text-base-content placeholder-base-content/30 focus:outline-none focus:ring-1 focus:ring-teal-500/50 focus:border-teal-500/50"
+                    />
+                  </div>
+                <% end %>
+
                 <%!-- Skill list --%>
-                <%= if @saved_skills == [] do %>
+                <% q = String.downcase(@skill_search)
+
+                visible_skills =
+                  if q == "" do
+                    @saved_skills
+                  else
+                    Enum.filter(@saved_skills, fn s ->
+                      String.contains?(String.downcase(s.name), q) or
+                        String.contains?(String.downcase(s.type), q) or
+                        String.contains?(String.downcase(s.description), q)
+                    end)
+                  end %>
+                <%= if visible_skills == [] do %>
                   <p class="text-xs text-base-content/50 text-center py-3">
-                    No skills loaded. Click
-                    <strong class="text-base-content/60">Check for updates</strong>
-                    to fetch skills from GitHub.
+                    <%= if @saved_skills == [] do %>
+                      No skills loaded. Click
+                      <strong class="text-base-content/60">Reload local</strong>
+                      or <strong class="text-base-content/60">Check GitHub</strong>
+                      to load skills.
+                    <% else %>
+                      No skills match <em>"{@skill_search}"</em>
+                    <% end %>
                   </p>
                 <% else %>
-                  <div class="space-y-1">
-                    <%= for skill <- @saved_skills do %>
+                  <%!-- Count hint when filtered --%>
+                  <%= if q != "" do %>
+                    <p class="text-xs text-base-content/40">
+                      {length(visible_skills)} of {length(@saved_skills)} skills
+                    </p>
+                  <% end %>
+                  <%!-- Scrollable list: max 5 rows visible (~40px/row = 200px) --%>
+                  <div class="space-y-0.5 max-h-[200px] overflow-y-auto pr-0.5 scrollbar-thin">
+                    <%= for skill <- visible_skills do %>
                       <div class="flex items-center gap-2 py-1.5 border-b border-base-300/30 last:border-0">
                         <span class={[
                           "text-xs px-1.5 py-0.5 rounded font-mono shrink-0",
@@ -1736,7 +1845,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                             name="hero-information-circle"
                             class="w-3.5 h-3.5 text-base-content/30 hover:text-base-content/70 cursor-default transition-colors"
                           />
-                          <div class="pointer-events-none absolute bottom-full right-0 mb-1.5 z-50
+                          <div class="pointer-events-none absolute top-full right-0 mt-1 z-50
                                       w-56 rounded-lg border border-base-300 bg-base-200 p-2.5 shadow-lg
                                       text-xs text-base-content/80 leading-relaxed
                                       opacity-0 group-hover:opacity-100 transition-opacity duration-150">
