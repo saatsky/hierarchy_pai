@@ -756,6 +756,9 @@ defmodule HierarchyPaiWeb.PlannerLive do
      socket
      |> assign(:redo_confirm, nil)
      |> assign(:status, :executing)
+     |> assign(:plan, plan)
+     |> update(:step_agent_types, &Map.put(&1, step_id, redo_agent_type))
+     |> update(:step_skills, &Map.put(&1, step_id, redo_skill_id))
      |> assign(:step_statuses, new_statuses)
      |> assign(:step_outputs, new_outputs)
      |> assign(:step_results, prior_results)
