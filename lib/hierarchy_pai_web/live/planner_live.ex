@@ -2337,16 +2337,18 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                   <input type="hidden" name="step_id" value={step["id"]} />
                                   <%= if @saved_providers != [] do %>
                                     <%!-- Saved providers: two dropdowns (provider name + model) --%>
-                                    <% saved_id = Map.get(step_cfg, :provider_id) %>
+                                    <% saved_id =
+                                      Map.get(step_cfg, :provider_id, @planner_provider_id) %>
                                     <% active_sp =
                                       Enum.find(@saved_providers, &(&1.id == saved_id)) ||
+                                        Enum.find(@saved_providers, &(&1.id == @planner_provider_id)) ||
                                         hd(@saved_providers) %>
                                     <select
                                       name="provider_id"
                                       class="bg-base-300 border border-violet-700/50 rounded text-xs text-violet-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
                                     >
                                       <%= for sp <- @saved_providers do %>
-                                        <option value={sp.id} selected={sp.id == saved_id}>
+                                        <option value={sp.id} selected={sp.id == active_sp.id}>
                                           {sp.name}
                                         </option>
                                       <% end %>
