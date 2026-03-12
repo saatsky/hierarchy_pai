@@ -1896,7 +1896,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                           {label}
                         </span>
                         <%!-- Tooltip --%>
-                        <div class="absolute left-full ml-2 top-0 z-50 hidden group-hover/item:block w-56 p-2.5 bg-base-100 border border-base-content/20 rounded-xl shadow-xl text-xs text-base-content/70 leading-relaxed pointer-events-none">
+                        <div class="absolute left-full ml-2 top-0 z-[9999] hidden group-hover/item:block w-56 p-2.5 bg-base-100 border border-base-content/20 rounded-xl shadow-xl text-xs text-base-content/70 leading-relaxed pointer-events-none">
                           <p class="font-semibold text-base-content/90 mb-1">{icon} {label}</p>
                           <p>{AgentRegistry.description(type)}</p>
                         </div>
@@ -2050,7 +2050,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         <% end %>
                         <%!-- Tooltip — positioned relative to the panel card (parent with `relative`)
                              so it escapes the scroll container's overflow clipping --%>
-                        <div class="absolute left-full ml-2 top-4 z-50 hidden group-hover/skill:block w-60 p-2.5 bg-base-100 border border-base-content/20 rounded-xl shadow-xl text-xs text-base-content/70 leading-relaxed pointer-events-none">
+                        <div class="absolute left-full ml-2 top-4 z-[9999] hidden group-hover/skill:block w-60 p-2.5 bg-base-100 border border-base-content/20 rounded-xl shadow-xl text-xs text-base-content/70 leading-relaxed pointer-events-none">
                           <p class="font-semibold text-base-content/90 mb-1">{skill.name}</p>
                           <span class={[
                             "inline-block text-[10px] px-1.5 py-0.5 rounded font-mono mb-1.5",
