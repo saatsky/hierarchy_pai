@@ -213,8 +213,40 @@ defmodule HierarchyPai.Agents.AgentRegistry do
     """
   }
 
+  @descriptions %{
+    "executor" =>
+      "General-purpose step executor. Produces clear, detailed results referencing prior step outputs.",
+    "backend_architect" =>
+      "Systems design expert specialising in scalable APIs, database schemas, auth, and integration patterns.",
+    "frontend_developer" =>
+      "Modern web UI specialist focused on performance, accessibility, and responsive design.",
+    "ai_engineer" =>
+      "Builds production-ready LLM pipelines, RAG systems, prompt engineering, and evaluation frameworks.",
+    "devops_automator" =>
+      "Infrastructure-as-code specialist covering CI/CD, containers, monitoring, and rollback strategies.",
+    "rapid_prototyper" =>
+      "Fast-moving builder who delivers the smallest working proof-of-concept, labelling tech-debt explicitly.",
+    "content_creator" =>
+      "Strategic wordsmith crafting audience-first copy, SEO content, CTAs, and brand-consistent messaging.",
+    "trend_researcher" =>
+      "Market intelligence specialist who validates trends, profiles competitors, and surfaces strategic opportunities.",
+    "feedback_synthesizer" =>
+      "Transforms raw qualitative and quantitative data into themed, ranked, actionable insights.",
+    "data_analytics" =>
+      "Turns metrics into business intelligence — defining KPIs, spotting anomalies, and recommending actions.",
+    "sprint_prioritizer" =>
+      "Scores and ranks backlog items by impact-to-effort, defines sprint goals, and flags scope creep.",
+    "growth_hacker" =>
+      "Designs rapid experiments across acquisition, activation, and retention to find scalable growth levers."
+  }
+
   @doc "Returns all agents as [{label, type, icon}] for use in UI dropdowns."
   def agents, do: @agents
+
+  @doc "Returns a short one-line description for the given agent type."
+  def description(agent_type) do
+    Map.get(@descriptions, agent_type, "General-purpose step executor.")
+  end
 
   @doc "Returns the system prompt for the given agent type. Falls back to executor."
   def system_prompt(agent_type) when is_binary(agent_type) do

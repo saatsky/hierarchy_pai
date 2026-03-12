@@ -1870,6 +1870,42 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <% end %>
               </div>
 
+              <%!-- Agent Specialists panel --%>
+              <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
+                    <.icon name="hero-user-group" class="w-3.5 h-3.5 text-indigo-400" />
+                    Agent Specialists
+                    <span class="ml-1 bg-indigo-100 text-indigo-700 dark:bg-indigo-600/30 dark:text-indigo-300 text-xs px-1.5 py-0.5 rounded-full font-mono">
+                      {length(AgentRegistry.agents())}
+                    </span>
+                  </p>
+                </div>
+                <details class="group">
+                  <summary class="text-xs text-base-content/50 cursor-pointer hover:text-base-content/70 select-none flex items-center gap-1 transition-colors">
+                    <.icon
+                      name="hero-chevron-right"
+                      class="w-3 h-3 transition-transform group-open:rotate-90"
+                    /> Show specialists
+                  </summary>
+                  <div class="mt-2 space-y-1">
+                    <%= for {label, type, icon} <- AgentRegistry.agents() do %>
+                      <div class="relative group/item flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-base-300/50 transition-colors">
+                        <span class="text-base leading-none shrink-0">{icon}</span>
+                        <span class="text-xs font-medium text-base-content/80 flex-1 truncate">
+                          {label}
+                        </span>
+                        <%!-- Tooltip --%>
+                        <div class="absolute left-full ml-2 top-0 z-50 hidden group-hover/item:block w-56 p-2.5 bg-base-100 border border-base-content/20 rounded-xl shadow-xl text-xs text-base-content/70 leading-relaxed pointer-events-none">
+                          <p class="font-semibold text-base-content/90 mb-1">{icon} {label}</p>
+                          <p>{AgentRegistry.description(type)}</p>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </details>
+              </div>
+
               <%!-- Skills panel --%>
               <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
                 <%!-- Header row --%>
