@@ -7,13 +7,17 @@ defmodule HierarchyPai.ProviderStore do
 
   Each entry shape:
       %{
-        id:       "uuid-hex",
-        name:     "My Copilot",
-        provider: :github_copilot,
-        model:    "gpt-4o",
-        api_key:  "github_pat_...",
-        endpoint: "https://api.githubcopilot.com/v1/chat/completions"
+        id:          "uuid-hex",
+        name:        "My Copilot",
+        provider:    :github_copilot,
+        model:       "gpt-4o",
+        api_key:     "github_pat_...",
+        endpoint:    "https://api.githubcopilot.com/v1/chat/completions",
+        max_retries: 0   # integer, defaults to 0; callers use Map.get(entry, :max_retries, 0)
       }
+
+  The `max_retries` field is optional for backwards compatibility. Existing entries
+  without `max_retries` should be treated as 0 by callers via `Map.get(entry, :max_retries, 0)`.
   """
 
   use GenServer

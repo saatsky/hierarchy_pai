@@ -231,6 +231,92 @@ defmodule HierarchyPai.LLMProvider do
     end
   end
 
+  @doc """
+  Fetches available models for use in the provider configuration form.
+  Works for all provider types. Returns `{:ok, [model_id]}` or `{:error, reason_string}`.
+
+    - Local providers (jan_ai/ollama): reuses `fetch_local_models/2`
+    - Cloud/custom providers: queries `GET /v1/models` with Authorization header
+  """
+  @spec fetch_models_for_form(atom(), String.t() | nil, String.t() | nil) ::
+          {:ok, [String.t()]} | {:error, String.t() | atom()}
+  def fetch_models_for_form(provider, endpoint, api_key) do
+    if local_provider?(provider) do
+      base_override =
+        if endpoint && endpoint != "", do: base_url_from_endpoint(endpoint), else: nil
+
+      case fetch_local_models(provider, base_override) do
+        {:ok, models, _base} -> {:ok, models}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      base =
+        cond do
+          endpoint && endpoint != "" -> base_url_from_endpoint(endpoint)
+          provider == :openai -> "https://api.openai.com"
+          provider == :anthropic -> "https://api.anthropic.com"
+          provider == :github_copilot -> "https://api.githubcopilot.com"
+          true -> nil
+        end
+
+      case base do
+        nil -> {:error, "No endpoint configured"}
+        url -> do_fetch_cloud_models("#{url}/v1/models", api_key, provider)
+      end
+    end
+  end
+
+  defp base_url_from_endpoint(endpoint) do
+    uri = URI.parse(endpoint)
+
+    port_str =
+      cond do
+        is_nil(uri.port) -> ""
+        uri.scheme == "https" and uri.port == 443 -> ""
+        uri.scheme == "http" and uri.port == 80 -> ""
+        true -> ":#{uri.port}"
+      end
+
+    "#{uri.scheme}://#{uri.host}#{port_str}"
+  end
+
+  defp do_fetch_cloud_models(url, api_key, provider) do
+    headers =
+      if provider == :anthropic do
+        [{"x-api-key", api_key || ""}, {"anthropic-version", "2023-06-01"}]
+      else
+        [{"authorization", "Bearer #{api_key || ""}"}]
+      end
+
+    case Req.get(url, receive_timeout: 10_000, retry: false, headers: headers) do
+      {:ok, %{status: 200, body: %{"data" => data}}} when is_list(data) ->
+        ids = data |> Enum.map(& &1["id"]) |> Enum.reject(&is_nil/1) |> Enum.sort()
+        {:ok, ids}
+
+      {:ok, %{status: 401}} ->
+        {:error, "Unauthorized — check your API key"}
+
+      {:ok, %{status: 403}} ->
+        {:error, "Forbidden — API key may lack permissions"}
+
+      {:ok, %{status: 404}} ->
+        {:error, "Models endpoint not found (404)"}
+
+      {:ok, %{status: status}} ->
+        {:error, "Server returned HTTP #{status}"}
+
+      {:error, %Req.TransportError{reason: reason}}
+      when reason in [:econnrefused, :nxdomain, :timeout] ->
+        {:error, :server_offline}
+
+      {:error, %Req.TransportError{reason: reason}} ->
+        {:error, "Connection error: #{reason}"}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
+
   @doc "Returns the default models list for cloud providers."
   def default_models(:openai), do: ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
   def default_models(:anthropic), do: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
