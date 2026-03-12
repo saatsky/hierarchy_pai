@@ -41,7 +41,6 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:local_models, [])
      |> assign(:local_host, "")
      |> assign(:wsl2, LLMProvider.wsl2?())
-     |> assign(:max_retries, 1)
      |> assign(:task, "")
      |> assign(:status, :idle)
      |> assign(:plan, nil)
@@ -73,6 +72,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:provider_form, nil)
      |> assign(:planner_provider_id, pick_default_provider_id(ProviderStore.list()))
      |> assign(:redo_confirm, nil)
+     |> assign(:retry_confirm, nil)
      |> assign(:mcp_runs, RunStore.list())}
   end
 
@@ -96,7 +96,6 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
           socket
           |> assign(:local_server_status, :checking)
-          |> assign(:max_retries, 1)
 
         provider == :github_copilot ->
           default = hd(LLMProvider.default_models(provider) ++ [""])
@@ -105,7 +104,6 @@ defmodule HierarchyPaiWeb.PlannerLive do
           |> assign(:local_server_status, :unknown)
           |> assign(:model, default)
           |> assign(:custom_endpoint, LLMProvider.github_copilot_endpoint())
-          |> assign(:max_retries, 2)
 
         true ->
           default = hd(LLMProvider.default_models(provider) ++ [""])
@@ -113,7 +111,6 @@ defmodule HierarchyPaiWeb.PlannerLive do
           socket
           |> assign(:local_server_status, :unknown)
           |> assign(:model, default)
-          |> assign(:max_retries, 2)
       end
 
     {:noreply, socket}
@@ -136,12 +133,6 @@ defmodule HierarchyPaiWeb.PlannerLive do
   end
 
   @impl true
-  def handle_event("update_max_retries", %{"value" => val}, socket) do
-    retries = val |> String.trim() |> String.to_integer() |> max(0) |> min(5)
-    {:noreply, assign(socket, :max_retries, retries)}
-  end
-
-  @impl true
   def handle_event("update_endpoint", %{"value" => ep}, socket) do
     {:noreply, assign(socket, :custom_endpoint, ep)}
   end
@@ -156,7 +147,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
       provider: :openai,
       model: "",
       api_key: "",
-      endpoint: ""
+      endpoint: "",
+      max_retries: 0,
+      available_models: LLMProvider.default_models(:openai),
+      fetching_models: false,
+      fetch_error: nil
     }
 
     {:noreply, assign(socket, :provider_form, blank)}
@@ -165,7 +160,15 @@ defmodule HierarchyPaiWeb.PlannerLive do
   @impl true
   def handle_event("edit_saved_provider", %{"id" => id}, socket) do
     entry = ProviderStore.get(id)
-    {:noreply, assign(socket, :provider_form, entry)}
+
+    form =
+      entry
+      |> Map.put(:max_retries, Map.get(entry, :max_retries, 0))
+      |> Map.put(:available_models, LLMProvider.default_models(entry.provider))
+      |> Map.put(:fetching_models, false)
+      |> Map.put(:fetch_error, nil)
+
+    {:noreply, assign(socket, :provider_form, form)}
   end
 
   @impl true
@@ -177,16 +180,36 @@ defmodule HierarchyPaiWeb.PlannerLive do
   def handle_event("provider_form_change", %{"saved_provider" => params}, socket) do
     current = socket.assigns.provider_form
 
+    new_provider =
+      String.to_existing_atom(Map.get(params, "provider", to_string(current.provider)))
+
+    provider_changed? = new_provider != current.provider
+
     updated =
       current
       |> Map.put(:name, Map.get(params, "name", current.name))
+      |> Map.put(:provider, new_provider)
       |> Map.put(
-        :provider,
-        String.to_existing_atom(Map.get(params, "provider", to_string(current.provider)))
+        :model,
+        if(provider_changed?, do: "", else: Map.get(params, "model", current.model))
       )
-      |> Map.put(:model, Map.get(params, "model", current.model))
       |> Map.put(:api_key, Map.get(params, "api_key", current.api_key))
       |> Map.put(:endpoint, Map.get(params, "endpoint", current.endpoint))
+      |> Map.put(
+        :max_retries,
+        Map.get(params, "max_retries", to_string(current.max_retries))
+        |> to_string()
+        |> String.to_integer()
+        |> max(0)
+        |> min(5)
+      )
+      |> Map.put(
+        :available_models,
+        if(provider_changed?,
+          do: LLMProvider.default_models(new_provider),
+          else: current.available_models
+        )
+      )
 
     {:noreply, assign(socket, :provider_form, updated)}
   end
@@ -207,7 +230,13 @@ defmodule HierarchyPaiWeb.PlannerLive do
       provider: provider,
       model: String.trim(Map.get(params, "model", "")),
       api_key: String.trim(Map.get(params, "api_key", "")),
-      endpoint: endpoint
+      endpoint: endpoint,
+      max_retries:
+        Map.get(params, "max_retries", "0")
+        |> to_string()
+        |> String.to_integer()
+        |> max(0)
+        |> min(5)
     }
 
     {:ok, _} = ProviderStore.save(entry)
@@ -243,7 +272,25 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
   @impl true
   def handle_event("update_planner_provider", %{"provider_id" => id}, socket) do
+    ProviderStore.set_default(id)
     {:noreply, assign(socket, :planner_provider_id, id)}
+  end
+
+  @impl true
+  def handle_event("fetch_provider_form_models", _params, socket) do
+    pf = socket.assigns.provider_form
+
+    socket =
+      assign(socket, :provider_form, Map.merge(pf, %{fetching_models: true, fetch_error: nil}))
+
+    pid = self()
+
+    Task.start(fn ->
+      result = LLMProvider.fetch_models_for_form(pf.provider, pf[:endpoint], pf[:api_key])
+      send(pid, {:provider_form_models_result, result})
+    end)
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -266,7 +313,8 @@ defmodule HierarchyPaiWeb.PlannerLive do
       provider: a.provider,
       model: a.model,
       api_key: a.api_key,
-      endpoint: a.custom_endpoint
+      endpoint: a.custom_endpoint,
+      max_retries: 0
     }
 
     {:noreply, assign(socket, :provider_form, entry)}
@@ -625,6 +673,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:step_agent_types, %{})
      |> assign(:selected_step_id, nil)
      |> assign(:redo_confirm, nil)
+     |> assign(:retry_confirm, nil)
      |> assign(:error, nil)}
   end
 
@@ -756,6 +805,9 @@ defmodule HierarchyPaiWeb.PlannerLive do
      socket
      |> assign(:redo_confirm, nil)
      |> assign(:status, :executing)
+     |> assign(:plan, plan)
+     |> update(:step_agent_types, &Map.put(&1, step_id, redo_agent_type))
+     |> update(:step_skills, &Map.put(&1, step_id, redo_skill_id))
      |> assign(:step_statuses, new_statuses)
      |> assign(:step_outputs, new_outputs)
      |> assign(:step_results, prior_results)
@@ -795,26 +847,81 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
   @impl true
   def handle_event("retry_failed_steps", _params, socket) do
-    # Retry all non-completed steps: both explicitly failed (:error) and those
-    # that never ran because their wave was aborted (:pending).
-    incomplete_ids =
+    # Show a confirm dialog (agent type + skill) before retrying, mirroring the redo flow.
+    failed_ids =
       socket.assigns.step_statuses
       |> Enum.filter(fn {_id, s} -> s in [:error, :pending] end)
       |> Enum.map(fn {id, _} -> id end)
-      |> MapSet.new()
 
-    plan = socket.assigns.plan
+    retry_confirm = %{
+      failed_ids: failed_ids,
+      retry_agent_type: "executor",
+      retry_skill_id: nil
+    }
+
+    {:noreply, assign(socket, :retry_confirm, retry_confirm)}
+  end
+
+  @impl true
+  def handle_event("cancel_retry_confirm", _params, socket) do
+    {:noreply, assign(socket, :retry_confirm, nil)}
+  end
+
+  @impl true
+  def handle_event("update_retry_agent_type", %{"agent_type" => agent_type}, socket) do
+    {:noreply, update(socket, :retry_confirm, &Map.put(&1, :retry_agent_type, agent_type))}
+  end
+
+  @impl true
+  def handle_event("update_retry_skill_id", %{"skill_id" => skill_id}, socket) do
+    value = if skill_id == "", do: nil, else: skill_id
+    {:noreply, update(socket, :retry_confirm, &Map.put(&1, :retry_skill_id, value))}
+  end
+
+  @impl true
+  def handle_event("confirm_retry_steps", _params, socket) do
+    %{
+      failed_ids: failed_ids,
+      retry_agent_type: retry_agent_type,
+      retry_skill_id: retry_skill_id
+    } = socket.assigns.retry_confirm
+
+    incomplete_ids = MapSet.new(failed_ids)
+
+    # Apply the chosen agent_type and skill_id overrides to all retried steps in the plan.
+    plan =
+      update_in(socket.assigns.plan, ["steps"], fn steps ->
+        Enum.map(steps, fn step ->
+          if step["id"] in failed_ids do
+            step
+            |> Map.put("agent_type", retry_agent_type)
+            |> Map.put("skill_id", retry_skill_id)
+          else
+            step
+          end
+        end)
+      end)
+
     step_configs = socket.assigns.step_configs
     default_config = build_provider_config(socket.assigns)
     resolved_step_configs = resolve_step_configs(step_configs, default_config)
     topic = socket.assigns.pubsub_topic
-    # Pass already-completed results as context so retried steps can reference them.
     prior_results = socket.assigns.step_results
 
-    # Reset incomplete steps to :pending
     new_statuses =
       Enum.reduce(incomplete_ids, socket.assigns.step_statuses, fn id, acc ->
         Map.put(acc, id, :pending)
+      end)
+
+    # Update step_agent_types and step_skills for all retried steps so board cards reflect changes.
+    new_agent_types =
+      Enum.reduce(failed_ids, socket.assigns.step_agent_types, fn id, acc ->
+        Map.put(acc, id, retry_agent_type)
+      end)
+
+    new_skills =
+      Enum.reduce(failed_ids, socket.assigns.step_skills, fn id, acc ->
+        Map.put(acc, id, retry_skill_id)
       end)
 
     {:ok, pid} =
@@ -842,8 +949,12 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
     {:noreply,
      socket
+     |> assign(:retry_confirm, nil)
+     |> assign(:plan, plan)
      |> assign(:status, :executing)
      |> assign(:step_statuses, new_statuses)
+     |> assign(:step_agent_types, new_agent_types)
+     |> assign(:step_skills, new_skills)
      |> assign(:step_errors, %{})
      |> assign(
        :step_outputs,
@@ -1191,6 +1302,35 @@ defmodule HierarchyPaiWeb.PlannerLive do
     {:noreply, assign(socket, :mcp_runs, RunStore.list())}
   end
 
+  def handle_info({:provider_form_models_result, result}, socket) do
+    pf = socket.assigns.provider_form
+
+    updated =
+      case result do
+        {:ok, models} ->
+          Map.merge(pf, %{
+            fetching_models: false,
+            available_models: models,
+            fetch_error: nil,
+            model: pf.model
+          })
+
+        {:error, :server_offline} ->
+          Map.merge(pf, %{
+            fetching_models: false,
+            fetch_error: "Server offline — enter model manually"
+          })
+
+        {:error, reason} when is_binary(reason) ->
+          Map.merge(pf, %{fetching_models: false, fetch_error: reason})
+
+        {:error, _} ->
+          Map.merge(pf, %{fetching_models: false, fetch_error: "Failed to fetch models"})
+      end
+
+    {:noreply, assign(socket, :provider_form, updated)}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # ── Helpers ────────────────────────────────────────────────────────────────
@@ -1202,14 +1342,14 @@ defmodule HierarchyPaiWeb.PlannerLive do
       nil ->
         # No saved provider selected — return an inert config; "run" button is disabled
         # in this state so this path is only hit defensively.
-        %{provider: :openai, model: "", api_key: "", max_retries: assigns.max_retries}
+        %{provider: :openai, model: "", api_key: "", max_retries: 1}
 
       entry ->
         base = %{
           provider: entry.provider,
           model: entry.model,
           api_key: entry.api_key,
-          max_retries: assigns.max_retries
+          max_retries: Map.get(entry, :max_retries, 1)
         }
 
         cond do
@@ -1240,7 +1380,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   provider: entry.provider,
                   model: model,
                   api_key: entry.api_key,
-                  max_retries: default_config.max_retries
+                  max_retries: Map.get(entry, :max_retries, default_config.max_retries)
                 }
 
                 cond do
@@ -1264,7 +1404,13 @@ defmodule HierarchyPaiWeb.PlannerLive do
   end
 
   defp pick_default_provider_id([]), do: nil
-  defp pick_default_provider_id([first | _]), do: first.id
+
+  defp pick_default_provider_id(providers) do
+    case Enum.find(providers, &Map.get(&1, :is_default, false)) do
+      %{id: id} -> id
+      nil -> hd(providers).id
+    end
+  end
 
   # Returns all step IDs (accepted) that transitively depend on `step_id`.
   defp transitive_dependents(step_id, steps, accepted) do
@@ -1470,95 +1616,18 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <% end %>
               </div>
 
-              <%!-- Planner Provider card --%>
-              <div class="bg-base-200/60 border border-base-300/50 rounded-2xl p-5 space-y-4 backdrop-blur-sm">
-                <h2 class="text-sm font-semibold text-base-content/80 uppercase tracking-wider flex items-center gap-2">
-                  <.icon name="hero-cog-6-tooth" class="w-4 h-4 text-violet-400" /> Planner Provider
-                </h2>
-
-                <%= if @saved_providers == [] do %>
-                  <%!-- Empty state: no providers configured --%>
-                  <div class="rounded-xl border border-dashed border-base-content/20 p-5 flex flex-col items-center text-center gap-3">
-                    <div class="w-10 h-10 rounded-xl bg-violet-100 border border-violet-300 dark:bg-violet-600/10 dark:border-violet-700/30 flex items-center justify-center">
-                      <.icon name="hero-bolt" class="w-5 h-5 text-violet-500" />
-                    </div>
-                    <div>
-                      <p class="text-sm font-medium text-base-content/80">No providers yet</p>
-                      <p class="text-xs text-base-content/50 mt-0.5">
-                        Add at least one provider to run tasks.
-                      </p>
-                    </div>
-                    <button
-                      phx-click="open_provider_form"
-                      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-colors"
-                    >
-                      <.icon name="hero-plus" class="w-3.5 h-3.5" /> Add Provider
-                    </button>
-                  </div>
-                <% else %>
-                  <%!-- Provider dropdown — select which saved provider drives the planner --%>
-                  <div>
-                    <label class="block text-xs text-base-content/60 mb-1.5">
-                      Select provider for planner &amp; aggregator
-                    </label>
-                    <form phx-change="update_planner_provider" id="planner-provider-form">
-                      <select
-                        name="provider_id"
-                        disabled={@status != :idle}
-                        class="w-full bg-base-300 border border-base-content/20 rounded-lg px-3 py-2 text-sm text-base-content focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <%= for entry <- @saved_providers do %>
-                          <option value={entry.id} selected={@planner_provider_id == entry.id}>
-                            {entry.name} — {entry.model}
-                          </option>
-                        <% end %>
-                      </select>
-                    </form>
-                    <%!-- Selected provider info badge --%>
-                    <%= if entry = Enum.find(@saved_providers, &(&1.id == @planner_provider_id)) do %>
-                      <div class="mt-2 flex items-center gap-2 text-xs text-base-content/60">
-                        <span class="px-2 py-0.5 rounded-full bg-base-100 border border-base-content/20 font-mono">
-                          {entry.provider}
-                        </span>
-                        <span class="text-base-content/50">·</span>
-                        <span class="truncate">{entry.model}</span>
-                      </div>
-                    <% end %>
-                  </div>
-
-                  <%!-- Max retries --%>
-                  <div>
-                    <label class="block text-xs text-base-content/60 mb-1.5">
-                      Chain retries (bad response)
-                    </label>
-                    <select
-                      phx-change="update_max_retries"
-                      name="max_retries"
-                      disabled={@status != :idle}
-                      class="w-full bg-base-300 border border-base-content/20 rounded-lg px-3 py-2 text-sm text-base-content focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <%= for n <- [0, 1, 2, 3, 5] do %>
-                        <option value={n} selected={@max_retries == n}>{n}</option>
-                      <% end %>
-                    </select>
-                    <p class="mt-1 text-xs text-base-content/50">
-                      Re-sends when the LLM returns malformed JSON. Min 1 recommended.
-                    </p>
-                  </div>
-                <% end %>
-              </div>
-
-              <%!-- Saved Providers panel --%>
-              <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
+              <%!-- Providers panel (unified) --%>
+              <div class="bg-base-200/60 border border-base-300/50 rounded-2xl p-4 space-y-3 backdrop-blur-sm">
+                <%!-- Header --%>
                 <div class="flex items-center justify-between">
-                  <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
-                    <.icon name="hero-bookmark" class="w-3.5 h-3.5 text-violet-400" /> Saved Providers
+                  <h2 class="text-sm font-semibold text-base-content/80 uppercase tracking-wider flex items-center gap-2">
+                    <.icon name="hero-cog-6-tooth" class="w-4 h-4 text-violet-400" /> Providers
                     <%= if @saved_providers != [] do %>
-                      <span class="ml-1 bg-violet-100 text-violet-700 dark:bg-violet-600/30 dark:text-violet-300 text-xs px-1.5 py-0.5 rounded-full">
+                      <span class="ml-1 bg-violet-100 text-violet-700 dark:bg-violet-600/30 dark:text-violet-300 text-xs px-1.5 py-0.5 rounded-full font-mono">
                         {length(@saved_providers)}
                       </span>
                     <% end %>
-                  </p>
+                  </h2>
                   <button
                     phx-click="open_provider_form"
                     class="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1 transition-colors"
@@ -1585,7 +1654,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       type="text"
                       name="saved_provider[name]"
                       value={pf[:name]}
-                      placeholder="e.g. My Copilot"
+                      placeholder="e.g. My Jan.ai"
                       class="w-full bg-base-200 border border-base-content/20 rounded-lg px-2.5 py-1.5 text-xs text-base-content placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
                     />
 
@@ -1599,25 +1668,46 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       <% end %>
                     </select>
 
-                    <%!-- Model --%>
-                    <%= if LLMProvider.default_models(pf[:provider] || :openai) != [] do %>
-                      <select
-                        name="saved_provider[model]"
-                        class="w-full bg-base-200 border border-base-content/20 rounded-lg px-2.5 py-1.5 text-xs text-base-content/80 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                      >
-                        <%= for m <- LLMProvider.default_models(pf[:provider] || :openai) do %>
-                          <option value={m} selected={pf[:model] == m}>{m}</option>
+                    <%!-- Model — text input + Fetch button, or select when models are available --%>
+                    <div class="space-y-1.5">
+                      <div class="flex gap-1.5">
+                        <%= if pf[:available_models] != [] do %>
+                          <select
+                            name="saved_provider[model]"
+                            class="flex-1 bg-base-200 border border-base-content/20 rounded-lg px-2.5 py-1.5 text-xs text-base-content/80 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                          >
+                            <option value="" disabled={pf[:model] != ""}>— select a model —</option>
+                            <%= for m <- pf[:available_models] do %>
+                              <option value={m} selected={pf[:model] == m}>{m}</option>
+                            <% end %>
+                          </select>
+                        <% else %>
+                          <input
+                            type="text"
+                            name="saved_provider[model]"
+                            value={pf[:model]}
+                            placeholder="model name (e.g. llama3.2)"
+                            class="flex-1 bg-base-200 border border-base-content/20 rounded-lg px-2.5 py-1.5 text-xs text-base-content placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                          />
                         <% end %>
-                      </select>
-                    <% else %>
-                      <input
-                        type="text"
-                        name="saved_provider[model]"
-                        value={pf[:model]}
-                        placeholder="model name"
-                        class="w-full bg-base-200 border border-base-content/20 rounded-lg px-2.5 py-1.5 text-xs text-base-content placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-                      />
-                    <% end %>
+                        <button
+                          type="button"
+                          phx-click="fetch_provider_form_models"
+                          disabled={pf[:fetching_models]}
+                          class="flex items-center gap-1 px-2.5 py-1.5 bg-violet-600/20 hover:bg-violet-600/40 border border-violet-600/30 rounded-lg text-xs text-violet-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Fetch available models from this provider"
+                        >
+                          <%= if pf[:fetching_models] do %>
+                            <.icon name="hero-arrow-path" class="w-3 h-3 animate-spin" />
+                          <% else %>
+                            <.icon name="hero-arrow-down-tray" class="w-3 h-3" />
+                          <% end %>
+                        </button>
+                      </div>
+                      <%= if pf[:fetch_error] do %>
+                        <p class="text-xs text-amber-400">{pf[:fetch_error]}</p>
+                      <% end %>
+                    </div>
 
                     <%!-- API key (if needed) --%>
                     <%= if pf[:provider] in [:openai, :anthropic, :github_copilot, :custom] do %>
@@ -1637,16 +1727,40 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       />
                     <% end %>
 
-                    <%!-- Endpoint (custom only; GitHub Copilot URL is fixed) --%>
-                    <%= if pf[:provider] == :custom do %>
+                    <%!-- Endpoint (local providers and custom show this) --%>
+                    <%= if pf[:provider] in [:jan_ai, :ollama, :custom] do %>
                       <input
                         type="text"
                         name="saved_provider[endpoint]"
                         value={pf[:endpoint]}
-                        placeholder="https://..."
+                        placeholder={
+                          case pf[:provider] do
+                            :jan_ai -> "http://localhost:1337 (optional)"
+                            :ollama -> "http://localhost:11434 (optional)"
+                            _ -> "https://..."
+                          end
+                        }
                         class="w-full bg-base-200 border border-base-content/20 rounded-lg px-2.5 py-1.5 text-xs text-base-content placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
                       />
                     <% end %>
+
+                    <%!-- Chain retries --%>
+                    <div>
+                      <label class="block text-xs text-base-content/60 mb-1">
+                        Chain retries (bad response)
+                      </label>
+                      <select
+                        name="saved_provider[max_retries]"
+                        class="w-full bg-base-200 border border-base-content/20 rounded-lg px-2.5 py-1.5 text-xs text-base-content/80 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                      >
+                        <%= for n <- [0, 1, 2, 3, 5] do %>
+                          <option value={n} selected={Map.get(pf, :max_retries, 0) == n}>{n}</option>
+                        <% end %>
+                      </select>
+                      <p class="mt-1 text-xs text-base-content/50">
+                        Re-sends when the LLM returns malformed JSON. Min 1 recommended.
+                      </p>
+                    </div>
 
                     <div class="flex gap-2 pt-1">
                       <button
@@ -1666,25 +1780,79 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   </form>
                 <% end %>
 
-                <%!-- Saved providers list --%>
+                <%!-- Empty state --%>
                 <%= if @saved_providers == [] and is_nil(@provider_form) do %>
-                  <p class="text-xs text-base-content/50 text-center py-2">
-                    No saved providers yet. Add one or save the current config.
-                  </p>
-                <% end %>
-
-                <%= for sp <- @saved_providers do %>
-                  <div class="flex items-center gap-2 py-2 border-b border-base-300/40 last:border-0">
-                    <div class="flex-1 min-w-0">
-                      <p class="text-xs font-medium text-base-content/90 truncate">{sp.name}</p>
-                      <p class="text-xs text-base-content/50 truncate">
-                        {sp.model} &middot; {sp.provider}
+                  <div class="rounded-xl border border-dashed border-base-content/20 p-5 flex flex-col items-center text-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-violet-100 border border-violet-300 dark:bg-violet-600/10 dark:border-violet-700/30 flex items-center justify-center">
+                      <.icon name="hero-bolt" class="w-5 h-5 text-violet-500" />
+                    </div>
+                    <div>
+                      <p class="text-sm font-medium text-base-content/80">No providers yet</p>
+                      <p class="text-xs text-base-content/50 mt-0.5">
+                        Add at least one provider to run tasks.
                       </p>
                     </div>
                     <button
+                      phx-click="open_provider_form"
+                      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-colors"
+                    >
+                      <.icon name="hero-plus" class="w-3.5 h-3.5" /> Add Provider
+                    </button>
+                  </div>
+                <% end %>
+
+                <%!-- Provider list --%>
+                <%= for sp <- @saved_providers do %>
+                  <% is_default = @planner_provider_id == sp.id %>
+                  <div class={[
+                    "flex items-center gap-2 py-2 border-b border-base-300/40 last:border-0 rounded-lg px-1 transition-colors",
+                    if(is_default, do: "bg-violet-600/10", else: "")
+                  ]}>
+                    <%!-- Default radio button --%>
+                    <button
+                      type="button"
+                      phx-click="update_planner_provider"
+                      phx-value-provider_id={sp.id}
+                      disabled={@status != :idle}
+                      title={if is_default, do: "Active provider", else: "Set as default"}
+                      class="flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <div class={[
+                        "w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors",
+                        if(is_default,
+                          do: "border-violet-500 bg-violet-500",
+                          else: "border-base-content/30 hover:border-violet-400"
+                        )
+                      ]}>
+                        <%= if is_default do %>
+                          <div class="w-1.5 h-1.5 rounded-full bg-white"></div>
+                        <% end %>
+                      </div>
+                    </button>
+
+                    <%!-- Provider info --%>
+                    <div class="flex-1 min-w-0">
+                      <p class="text-xs font-medium text-base-content/90 truncate flex items-center gap-1.5">
+                        {sp.name}
+                        <%= if is_default do %>
+                          <span class="text-[10px] text-violet-400 font-normal">default</span>
+                        <% end %>
+                      </p>
+                      <p class="text-xs text-base-content/50 truncate">
+                        {sp.model} &middot; {sp.provider}
+                        <%= if Map.get(sp, :max_retries, 0) > 0 do %>
+                          <span class="ml-1 text-base-content/40">
+                            ↺{Map.get(sp, :max_retries, 0)}
+                          </span>
+                        <% end %>
+                      </p>
+                    </div>
+
+                    <%!-- Edit / Delete --%>
+                    <button
                       phx-click="edit_saved_provider"
                       phx-value-id={sp.id}
-                      class="text-base-content/50 hover:text-base-content/80 transition-colors"
+                      class="text-base-content/50 hover:text-base-content/80 transition-colors flex-shrink-0"
                       title="Edit"
                     >
                       <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
@@ -1693,7 +1861,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       phx-click="delete_saved_provider"
                       phx-value-id={sp.id}
                       data-confirm="Delete this saved provider?"
-                      class="text-base-content/50 hover:text-red-400 transition-colors"
+                      class="text-base-content/50 hover:text-red-400 transition-colors flex-shrink-0"
                       title="Delete"
                     >
                       <.icon name="hero-trash" class="w-3.5 h-3.5" />
@@ -1702,8 +1870,44 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <% end %>
               </div>
 
-              <%!-- Skills panel --%>
+              <%!-- Agent Specialists panel --%>
               <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
+                    <.icon name="hero-user-group" class="w-3.5 h-3.5 text-indigo-400" />
+                    Agent Specialists
+                    <span class="ml-1 bg-indigo-100 text-indigo-700 dark:bg-indigo-600/30 dark:text-indigo-300 text-xs px-1.5 py-0.5 rounded-full font-mono">
+                      {length(AgentRegistry.agents())}
+                    </span>
+                  </p>
+                </div>
+                <details class="group">
+                  <summary class="text-xs text-base-content/50 cursor-pointer hover:text-base-content/70 select-none flex items-center gap-1 transition-colors">
+                    <.icon
+                      name="hero-chevron-right"
+                      class="w-3 h-3 transition-transform group-open:rotate-90"
+                    /> Show specialists
+                  </summary>
+                  <div class="mt-2 space-y-1">
+                    <%= for {label, type, icon} <- AgentRegistry.agents() do %>
+                      <div class="relative group/item flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-base-300/50 transition-colors">
+                        <span class="text-base leading-none shrink-0">{icon}</span>
+                        <span class="text-xs font-medium text-base-content/80 flex-1 truncate">
+                          {label}
+                        </span>
+                        <%!-- Tooltip --%>
+                        <div class="absolute left-full ml-2 top-0 z-[9999] hidden group-hover/item:block w-56 p-2.5 bg-base-100 border border-base-content/20 rounded-xl shadow-xl text-xs text-base-content/70 leading-relaxed pointer-events-none">
+                          <p class="font-semibold text-base-content/90 mb-1">{icon} {label}</p>
+                          <p>{AgentRegistry.description(type)}</p>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </details>
+              </div>
+
+              <%!-- Skills panel --%>
+              <div class="relative bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
                 <%!-- Header row --%>
                 <div class="flex items-center justify-between">
                   <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
@@ -1817,7 +2021,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   <%!-- Scrollable list: max 5 rows visible (~40px/row = 200px) --%>
                   <div class="space-y-0.5 max-h-[200px] overflow-y-auto pr-0.5 scrollbar-thin">
                     <%= for skill <- visible_skills do %>
-                      <div class="flex items-center gap-2 py-1.5 border-b border-base-300/30 last:border-0">
+                      <div class="group/skill flex items-center gap-2 py-1.5 border-b border-base-300/30 last:border-0 hover:bg-base-300/40 rounded-lg px-1 transition-colors cursor-default">
                         <span class={[
                           "text-xs px-1.5 py-0.5 rounded font-mono shrink-0",
                           case skill.type do
@@ -1839,25 +2043,35 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         <p class="flex-1 min-w-0 text-xs font-medium text-base-content/90 truncate">
                           {skill.name}
                         </p>
-                        <%!-- Info icon with CSS tooltip showing the skill description --%>
-                        <div class="relative group shrink-0">
-                          <.icon
-                            name="hero-information-circle"
-                            class="w-3.5 h-3.5 text-base-content/30 hover:text-base-content/70 cursor-default transition-colors"
-                          />
-                          <div class="pointer-events-none absolute top-full right-0 mt-1 z-50
-                                      w-56 rounded-lg border border-base-300 bg-base-200 p-2.5 shadow-lg
-                                      text-xs text-base-content/80 leading-relaxed
-                                      opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                            <p class="font-semibold text-base-content/90 mb-1">{skill.name}</p>
-                            {skill.description}
-                          </div>
-                        </div>
                         <%= if skill[:source] == :remote do %>
                           <span class="text-xs text-teal-500 shrink-0" title="Synced from GitHub">
                             <.icon name="hero-cloud-arrow-down" class="w-3 h-3" />
                           </span>
                         <% end %>
+                        <%!-- Tooltip — positioned relative to the panel card (parent with `relative`)
+                             so it escapes the scroll container's overflow clipping --%>
+                        <div class="absolute left-full ml-2 top-4 z-[9999] hidden group-hover/skill:block w-60 p-2.5 bg-base-100 border border-base-content/20 rounded-xl shadow-xl text-xs text-base-content/70 leading-relaxed pointer-events-none">
+                          <p class="font-semibold text-base-content/90 mb-1">{skill.name}</p>
+                          <span class={[
+                            "inline-block text-[10px] px-1.5 py-0.5 rounded font-mono mb-1.5",
+                            case skill.type do
+                              "research" ->
+                                "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+
+                              "content" ->
+                                "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+
+                              "engineering" ->
+                                "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+
+                              _ ->
+                                "bg-base-100/60 text-base-content/60"
+                            end
+                          ]}>
+                            {skill.type}
+                          </span>
+                          <p>{skill.description}</p>
+                        </div>
                       </div>
                     <% end %>
                   </div>
@@ -2169,16 +2383,18 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                   <input type="hidden" name="step_id" value={step["id"]} />
                                   <%= if @saved_providers != [] do %>
                                     <%!-- Saved providers: two dropdowns (provider name + model) --%>
-                                    <% saved_id = Map.get(step_cfg, :provider_id) %>
+                                    <% saved_id =
+                                      Map.get(step_cfg, :provider_id, @planner_provider_id) %>
                                     <% active_sp =
                                       Enum.find(@saved_providers, &(&1.id == saved_id)) ||
+                                        Enum.find(@saved_providers, &(&1.id == @planner_provider_id)) ||
                                         hd(@saved_providers) %>
                                     <select
                                       name="provider_id"
                                       class="bg-base-300 border border-violet-700/50 rounded text-xs text-violet-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
                                     >
                                       <%= for sp <- @saved_providers do %>
-                                        <option value={sp.id} selected={sp.id == saved_id}>
+                                        <option value={sp.id} selected={sp.id == active_sp.id}>
                                           {sp.name}
                                         </option>
                                       <% end %>
@@ -2746,6 +2962,112 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         class="px-5 py-2 rounded-xl text-sm font-semibold bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center gap-2"
                       >
                         <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Redo
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Retry failed steps confirmation modal --%>
+              <%= if @retry_confirm do %>
+                <% failed_steps =
+                  Enum.filter(@plan["steps"] || [], &(&1["id"] in @retry_confirm.failed_ids)) %>
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/60 backdrop-blur-sm">
+                  <div class="bg-base-200 border border-orange-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                    <div class="px-6 py-5 border-b border-base-300/50 flex items-center gap-3">
+                      <div class="w-8 h-8 rounded-lg bg-orange-100 dark:bg-orange-600/20 flex items-center justify-center">
+                        <.icon name="hero-arrow-path" class="w-4 h-4 text-orange-400" />
+                      </div>
+                      <h3 class="font-semibold text-base-content/90">
+                        Retry {length(@retry_confirm.failed_ids)} failed step{if length(
+                                                                                   @retry_confirm.failed_ids
+                                                                                 ) != 1,
+                                                                                 do: "s",
+                                                                                 else: ""}?
+                      </h3>
+                      <button
+                        phx-click="cancel_retry_confirm"
+                        class="ml-auto text-base-content/50 hover:text-base-content/80 transition-colors"
+                      >
+                        <.icon name="hero-x-mark" class="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div class="p-6 space-y-4">
+                      <%!-- Failed steps list --%>
+                      <div class="space-y-1.5">
+                        <%= for s <- failed_steps do %>
+                          <div class="bg-orange-50 border border-orange-200 dark:bg-orange-900/15 dark:border-orange-700/30 rounded-lg px-3 py-2">
+                            <p class="text-xs text-base-content/80">
+                              <span class="font-bold text-orange-600 dark:text-orange-400">
+                                #{s["id"]}
+                              </span>
+                              — {s["title"]}
+                            </p>
+                          </div>
+                        <% end %>
+                      </div>
+                      <%!-- Specialist and Skill overrides (applied to all retried steps) --%>
+                      <div class="rounded-lg border border-base-300/50 bg-base-100/30 p-3 space-y-2">
+                        <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1">
+                          Override for all retried steps
+                        </p>
+                        <form
+                          phx-change="update_retry_agent_type"
+                          id="retry-agent-type-form"
+                          class="flex items-center gap-2"
+                        >
+                          <span class="text-xs text-base-content/50 shrink-0 w-20">Specialist:</span>
+                          <select
+                            name="agent_type"
+                            class="flex-1 bg-base-300 border border-indigo-400 rounded text-xs text-base-content dark:border-indigo-700/50 dark:text-indigo-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          >
+                            <%= for {label, val, icon} <- AgentRegistry.agents() do %>
+                              <option value={val} selected={@retry_confirm.retry_agent_type == val}>
+                                {icon} {label}
+                              </option>
+                            <% end %>
+                          </select>
+                        </form>
+                        <%= if @saved_skills != [] do %>
+                          <form
+                            phx-change="update_retry_skill_id"
+                            id="retry-skill-id-form"
+                            class="flex items-center gap-2"
+                          >
+                            <span class="text-xs text-base-content/50 shrink-0 w-20">Skill:</span>
+                            <select
+                              name="skill_id"
+                              class="flex-1 bg-base-300 border border-teal-400 rounded text-xs text-base-content dark:border-teal-700/50 dark:text-teal-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                            >
+                              <option value="">— default specialist —</option>
+                              <%= for skill <- @saved_skills do %>
+                                <option
+                                  value={skill.id}
+                                  selected={@retry_confirm.retry_skill_id == skill.id}
+                                >
+                                  {skill.name}
+                                </option>
+                              <% end %>
+                            </select>
+                          </form>
+                        <% end %>
+                      </div>
+                      <p class="text-xs text-base-content/50">
+                        The final answer will be re-generated once all retried steps complete.
+                      </p>
+                    </div>
+                    <div class="px-6 py-4 border-t border-base-300/50 flex items-center gap-3 justify-end">
+                      <button
+                        phx-click="cancel_retry_confirm"
+                        class="px-4 py-2 rounded-xl text-sm font-medium bg-base-100/60 hover:bg-base-200/60 text-base-content/80 border border-base-content/20 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        phx-click="confirm_retry_steps"
+                        class="px-5 py-2 rounded-xl text-sm font-semibold bg-orange-600 hover:bg-orange-500 text-white transition-colors flex items-center gap-2"
+                      >
+                        <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Retry
                       </button>
                     </div>
                   </div>
