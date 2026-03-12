@@ -1250,7 +1250,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
             fetching_models: false,
             available_models: models,
             fetch_error: nil,
-            model: if(pf.model == "" and models != [], do: hd(models), else: pf.model)
+            model: pf.model
           })
 
         {:error, :server_offline} ->
