@@ -1907,7 +1907,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
               </div>
 
               <%!-- Skills panel --%>
-              <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
+              <div class="relative bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
                 <%!-- Header row --%>
                 <div class="flex items-center justify-between">
                   <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
@@ -2021,7 +2021,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                   <%!-- Scrollable list: max 5 rows visible (~40px/row = 200px) --%>
                   <div class="space-y-0.5 max-h-[200px] overflow-y-auto pr-0.5 scrollbar-thin">
                     <%= for skill <- visible_skills do %>
-                      <div class="flex items-center gap-2 py-1.5 border-b border-base-300/30 last:border-0">
+                      <div class="group/skill flex items-center gap-2 py-1.5 border-b border-base-300/30 last:border-0 hover:bg-base-300/40 rounded-lg px-1 transition-colors cursor-default">
                         <span class={[
                           "text-xs px-1.5 py-0.5 rounded font-mono shrink-0",
                           case skill.type do
@@ -2043,25 +2043,35 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         <p class="flex-1 min-w-0 text-xs font-medium text-base-content/90 truncate">
                           {skill.name}
                         </p>
-                        <%!-- Info icon with CSS tooltip showing the skill description --%>
-                        <div class="relative group shrink-0">
-                          <.icon
-                            name="hero-information-circle"
-                            class="w-3.5 h-3.5 text-base-content/30 hover:text-base-content/70 cursor-default transition-colors"
-                          />
-                          <div class="pointer-events-none absolute top-full right-0 mt-1 z-50
-                                      w-56 rounded-lg border border-base-300 bg-base-200 p-2.5 shadow-lg
-                                      text-xs text-base-content/80 leading-relaxed
-                                      opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                            <p class="font-semibold text-base-content/90 mb-1">{skill.name}</p>
-                            {skill.description}
-                          </div>
-                        </div>
                         <%= if skill[:source] == :remote do %>
                           <span class="text-xs text-teal-500 shrink-0" title="Synced from GitHub">
                             <.icon name="hero-cloud-arrow-down" class="w-3 h-3" />
                           </span>
                         <% end %>
+                        <%!-- Tooltip — positioned relative to the panel card (parent with `relative`)
+                             so it escapes the scroll container's overflow clipping --%>
+                        <div class="absolute left-full ml-2 top-4 z-50 hidden group-hover/skill:block w-60 p-2.5 bg-base-100 border border-base-content/20 rounded-xl shadow-xl text-xs text-base-content/70 leading-relaxed pointer-events-none">
+                          <p class="font-semibold text-base-content/90 mb-1">{skill.name}</p>
+                          <span class={[
+                            "inline-block text-[10px] px-1.5 py-0.5 rounded font-mono mb-1.5",
+                            case skill.type do
+                              "research" ->
+                                "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+
+                              "content" ->
+                                "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+
+                              "engineering" ->
+                                "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+
+                              _ ->
+                                "bg-base-100/60 text-base-content/60"
+                            end
+                          ]}>
+                            {skill.type}
+                          </span>
+                          <p>{skill.description}</p>
+                        </div>
                       </div>
                     <% end %>
                   </div>
