@@ -72,6 +72,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:provider_form, nil)
      |> assign(:planner_provider_id, pick_default_provider_id(ProviderStore.list()))
      |> assign(:redo_confirm, nil)
+     |> assign(:retry_confirm, nil)
      |> assign(:mcp_runs, RunStore.list())}
   end
 
@@ -271,6 +272,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
   @impl true
   def handle_event("update_planner_provider", %{"provider_id" => id}, socket) do
+    ProviderStore.set_default(id)
     {:noreply, assign(socket, :planner_provider_id, id)}
   end
 
@@ -671,6 +673,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:step_agent_types, %{})
      |> assign(:selected_step_id, nil)
      |> assign(:redo_confirm, nil)
+     |> assign(:retry_confirm, nil)
      |> assign(:error, nil)}
   end
 
@@ -844,26 +847,81 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
   @impl true
   def handle_event("retry_failed_steps", _params, socket) do
-    # Retry all non-completed steps: both explicitly failed (:error) and those
-    # that never ran because their wave was aborted (:pending).
-    incomplete_ids =
+    # Show a confirm dialog (agent type + skill) before retrying, mirroring the redo flow.
+    failed_ids =
       socket.assigns.step_statuses
       |> Enum.filter(fn {_id, s} -> s in [:error, :pending] end)
       |> Enum.map(fn {id, _} -> id end)
-      |> MapSet.new()
 
-    plan = socket.assigns.plan
+    retry_confirm = %{
+      failed_ids: failed_ids,
+      retry_agent_type: "executor",
+      retry_skill_id: nil
+    }
+
+    {:noreply, assign(socket, :retry_confirm, retry_confirm)}
+  end
+
+  @impl true
+  def handle_event("cancel_retry_confirm", _params, socket) do
+    {:noreply, assign(socket, :retry_confirm, nil)}
+  end
+
+  @impl true
+  def handle_event("update_retry_agent_type", %{"agent_type" => agent_type}, socket) do
+    {:noreply, update(socket, :retry_confirm, &Map.put(&1, :retry_agent_type, agent_type))}
+  end
+
+  @impl true
+  def handle_event("update_retry_skill_id", %{"skill_id" => skill_id}, socket) do
+    value = if skill_id == "", do: nil, else: skill_id
+    {:noreply, update(socket, :retry_confirm, &Map.put(&1, :retry_skill_id, value))}
+  end
+
+  @impl true
+  def handle_event("confirm_retry_steps", _params, socket) do
+    %{
+      failed_ids: failed_ids,
+      retry_agent_type: retry_agent_type,
+      retry_skill_id: retry_skill_id
+    } = socket.assigns.retry_confirm
+
+    incomplete_ids = MapSet.new(failed_ids)
+
+    # Apply the chosen agent_type and skill_id overrides to all retried steps in the plan.
+    plan =
+      update_in(socket.assigns.plan, ["steps"], fn steps ->
+        Enum.map(steps, fn step ->
+          if step["id"] in failed_ids do
+            step
+            |> Map.put("agent_type", retry_agent_type)
+            |> Map.put("skill_id", retry_skill_id)
+          else
+            step
+          end
+        end)
+      end)
+
     step_configs = socket.assigns.step_configs
     default_config = build_provider_config(socket.assigns)
     resolved_step_configs = resolve_step_configs(step_configs, default_config)
     topic = socket.assigns.pubsub_topic
-    # Pass already-completed results as context so retried steps can reference them.
     prior_results = socket.assigns.step_results
 
-    # Reset incomplete steps to :pending
     new_statuses =
       Enum.reduce(incomplete_ids, socket.assigns.step_statuses, fn id, acc ->
         Map.put(acc, id, :pending)
+      end)
+
+    # Update step_agent_types and step_skills for all retried steps so board cards reflect changes.
+    new_agent_types =
+      Enum.reduce(failed_ids, socket.assigns.step_agent_types, fn id, acc ->
+        Map.put(acc, id, retry_agent_type)
+      end)
+
+    new_skills =
+      Enum.reduce(failed_ids, socket.assigns.step_skills, fn id, acc ->
+        Map.put(acc, id, retry_skill_id)
       end)
 
     {:ok, pid} =
@@ -891,8 +949,12 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
     {:noreply,
      socket
+     |> assign(:retry_confirm, nil)
+     |> assign(:plan, plan)
      |> assign(:status, :executing)
      |> assign(:step_statuses, new_statuses)
+     |> assign(:step_agent_types, new_agent_types)
+     |> assign(:step_skills, new_skills)
      |> assign(:step_errors, %{})
      |> assign(
        :step_outputs,
@@ -1342,7 +1404,13 @@ defmodule HierarchyPaiWeb.PlannerLive do
   end
 
   defp pick_default_provider_id([]), do: nil
-  defp pick_default_provider_id([first | _]), do: first.id
+
+  defp pick_default_provider_id(providers) do
+    case Enum.find(providers, &Map.get(&1, :is_default, false)) do
+      %{id: id} -> id
+      nil -> hd(providers).id
+    end
+  end
 
   # Returns all step IDs (accepted) that transitively depend on `step_id`.
   defp transitive_dependents(step_id, steps, accepted) do
@@ -2846,6 +2914,112 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         class="px-5 py-2 rounded-xl text-sm font-semibold bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center gap-2"
                       >
                         <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Redo
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              <% end %>
+
+              <%!-- Retry failed steps confirmation modal --%>
+              <%= if @retry_confirm do %>
+                <% failed_steps =
+                  Enum.filter(@plan["steps"] || [], &(&1["id"] in @retry_confirm.failed_ids)) %>
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/60 backdrop-blur-sm">
+                  <div class="bg-base-200 border border-orange-700/50 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                    <div class="px-6 py-5 border-b border-base-300/50 flex items-center gap-3">
+                      <div class="w-8 h-8 rounded-lg bg-orange-100 dark:bg-orange-600/20 flex items-center justify-center">
+                        <.icon name="hero-arrow-path" class="w-4 h-4 text-orange-400" />
+                      </div>
+                      <h3 class="font-semibold text-base-content/90">
+                        Retry {length(@retry_confirm.failed_ids)} failed step{if length(
+                                                                                   @retry_confirm.failed_ids
+                                                                                 ) != 1,
+                                                                                 do: "s",
+                                                                                 else: ""}?
+                      </h3>
+                      <button
+                        phx-click="cancel_retry_confirm"
+                        class="ml-auto text-base-content/50 hover:text-base-content/80 transition-colors"
+                      >
+                        <.icon name="hero-x-mark" class="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div class="p-6 space-y-4">
+                      <%!-- Failed steps list --%>
+                      <div class="space-y-1.5">
+                        <%= for s <- failed_steps do %>
+                          <div class="bg-orange-50 border border-orange-200 dark:bg-orange-900/15 dark:border-orange-700/30 rounded-lg px-3 py-2">
+                            <p class="text-xs text-base-content/80">
+                              <span class="font-bold text-orange-600 dark:text-orange-400">
+                                #{s["id"]}
+                              </span>
+                              — {s["title"]}
+                            </p>
+                          </div>
+                        <% end %>
+                      </div>
+                      <%!-- Specialist and Skill overrides (applied to all retried steps) --%>
+                      <div class="rounded-lg border border-base-300/50 bg-base-100/30 p-3 space-y-2">
+                        <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1">
+                          Override for all retried steps
+                        </p>
+                        <form
+                          phx-change="update_retry_agent_type"
+                          id="retry-agent-type-form"
+                          class="flex items-center gap-2"
+                        >
+                          <span class="text-xs text-base-content/50 shrink-0 w-20">Specialist:</span>
+                          <select
+                            name="agent_type"
+                            class="flex-1 bg-base-300 border border-indigo-400 rounded text-xs text-base-content dark:border-indigo-700/50 dark:text-indigo-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          >
+                            <%= for {label, val, icon} <- AgentRegistry.agents() do %>
+                              <option value={val} selected={@retry_confirm.retry_agent_type == val}>
+                                {icon} {label}
+                              </option>
+                            <% end %>
+                          </select>
+                        </form>
+                        <%= if @saved_skills != [] do %>
+                          <form
+                            phx-change="update_retry_skill_id"
+                            id="retry-skill-id-form"
+                            class="flex items-center gap-2"
+                          >
+                            <span class="text-xs text-base-content/50 shrink-0 w-20">Skill:</span>
+                            <select
+                              name="skill_id"
+                              class="flex-1 bg-base-300 border border-teal-400 rounded text-xs text-base-content dark:border-teal-700/50 dark:text-teal-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                            >
+                              <option value="">— default specialist —</option>
+                              <%= for skill <- @saved_skills do %>
+                                <option
+                                  value={skill.id}
+                                  selected={@retry_confirm.retry_skill_id == skill.id}
+                                >
+                                  {skill.name}
+                                </option>
+                              <% end %>
+                            </select>
+                          </form>
+                        <% end %>
+                      </div>
+                      <p class="text-xs text-base-content/50">
+                        The final answer will be re-generated once all retried steps complete.
+                      </p>
+                    </div>
+                    <div class="px-6 py-4 border-t border-base-300/50 flex items-center gap-3 justify-end">
+                      <button
+                        phx-click="cancel_retry_confirm"
+                        class="px-4 py-2 rounded-xl text-sm font-medium bg-base-100/60 hover:bg-base-200/60 text-base-content/80 border border-base-content/20 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        phx-click="confirm_retry_steps"
+                        class="px-5 py-2 rounded-xl text-sm font-semibold bg-orange-600 hover:bg-orange-500 text-white transition-colors flex items-center gap-2"
+                      >
+                        <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Retry
                       </button>
                     </div>
                   </div>

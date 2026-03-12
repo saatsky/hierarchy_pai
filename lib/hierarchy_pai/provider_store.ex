@@ -13,11 +13,12 @@ defmodule HierarchyPai.ProviderStore do
         model:       "gpt-4o",
         api_key:     "github_pat_...",
         endpoint:    "https://api.githubcopilot.com/v1/chat/completions",
-        max_retries: 0   # integer, defaults to 0; callers use Map.get(entry, :max_retries, 0)
+        max_retries: 0,   # integer, defaults to 0; callers use Map.get(entry, :max_retries, 0)
+        is_default:  true # boolean; only one entry has this set to true at a time
       }
 
-  The `max_retries` field is optional for backwards compatibility. Existing entries
-  without `max_retries` should be treated as 0 by callers via `Map.get(entry, :max_retries, 0)`.
+  Both `max_retries` and `is_default` are optional for backwards compatibility.
+  Use `Map.get(entry, :max_retries, 0)` and `Map.get(entry, :is_default, false)`.
   """
 
   use GenServer
@@ -55,6 +56,12 @@ defmodule HierarchyPai.ProviderStore do
     GenServer.call(__MODULE__, {:delete, id})
   end
 
+  @doc "Marks the provider with `id` as the default, clearing is_default on all others."
+  @spec set_default(String.t()) :: :ok
+  def set_default(id) do
+    GenServer.call(__MODULE__, {:set_default, id})
+  end
+
   ## GenServer
 
   def start_link(_opts) do
@@ -78,6 +85,16 @@ defmodule HierarchyPai.ProviderStore do
   @impl true
   def handle_call({:delete, id}, _from, state) do
     :ets.delete(@table, id)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:set_default, id}, _from, state) do
+    :ets.tab2list(@table)
+    |> Enum.each(fn {eid, entry} ->
+      :ets.insert(@table, {eid, Map.put(entry, :is_default, eid == id)})
+    end)
+
     {:reply, :ok, state}
   end
 
