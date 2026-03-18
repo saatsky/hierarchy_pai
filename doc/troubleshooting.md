@@ -246,6 +246,92 @@ On Linux, this requires Docker Engine ≥ 20.10. The `docker-compose.yml` alread
 
 ---
 
+## Plans Issues
+
+### Uploaded plan doesn't restore MCP server assignments
+
+**Cause**: MCP server assignments in exported plans use server *names*, not IDs. If the server isn't currently connected, or its name differs from what was saved, the step's MCP server cannot be resolved.
+
+**Fix**:
+1. Open the **MCP Servers** panel and connect a server with the **exact same name** that appears in the exported JSON (`mcp_server_names` field per step).
+2. Re-upload the plan — assignments are resolved at upload time.
+
+> **Tip:** Check the downloaded JSON file (`mcp_server_names` array inside each step) to confirm the expected server name.
+
+---
+
+### Skill auto-assigned by the Planner is wrong
+
+The Planner reads your installed skills and picks the best match for each step. The choice is heuristic — it may be incorrect.
+
+**Fix**: In the review phase, use the **Skill** dropdown on each step to override the assignment before running.
+
+---
+
+### Plan upload doesn't appear in Saved Plans panel
+
+**Cause**: Plans are only auto-saved to the Saved Plans panel on upload when the JSON contains a top-level `"name"` field.
+
+**Fix**: Ensure your plan was downloaded (not manually edited) or that the `"name"` field is present in the JSON:
+
+```json
+{
+  "name": "my-plan",
+  "task": "...",
+  "steps": [...]
+}
+```
+
+If the field is missing, add it manually and re-upload.
+
+---
+
+### Downloaded plan is missing skill / MCP server / agent info
+
+This happened on older versions where `save_plan` didn't enrich step assignments.
+
+**Fix**: Reload the plan in the review phase, re-assign the specialists/skills/MCP servers you want, save the plan again, and re-download. The new export will include full assignment metadata.
+
+---
+
+## MCP Client Issues
+
+### MCP server shows "Error" status after connecting
+
+**Cause**: The server URL is unreachable or returned an unexpected response.
+
+**Common causes**:
+
+| Root cause | Fix |
+|---|---|
+| Using `0.0.0.0` as destination | Use `localhost` or `127.0.0.1` instead — `0.0.0.0` is a bind address, not a target |
+| Model not started in Jan.ai | Open Jan.ai, go to the model, and click **Start** before connecting |
+| Wrong port | Confirm the MCP server is running and check its actual port |
+| Running in Docker | Use `http://host.docker.internal:<port>` instead of `localhost` |
+
+---
+
+### `Request body too large for gpt-4o model. Max size: 8000 tokens`
+
+**Cause**: An MCP tool (e.g. `GetMySquadTasks`) returned a very large response that exceeded the model's context window when combined with the system prompt.
+
+**Fixes**:
+1. **Assign the collaboration-tasks skill** to the step — the skill instructs the agent to filter only the relevant fields (title, status, assignee, due date), dramatically reducing token usage.
+2. **Responses are truncated to 4 000 characters automatically** — if the truncated response is still incomplete, the skill ensures the agent focuses on key fields rather than parsing the full payload.
+3. **Use a model with a larger context window** (e.g. `claude-3-5-sonnet`, `gpt-4o` with 128k context) for steps that call data-heavy MCP tools.
+
+---
+
+### MCP tool call returns `[response truncated]` notice
+
+**Cause**: The tool response exceeded the 4 000-character limit. The executor clips the response and appends `...[response truncated at 4000 chars — use a more targeted query or filter fields]`.
+
+**What to do**:
+- Assign a skill that instructs the agent to request a subset of fields (e.g. only `title` and `status`).
+- If the MCP server supports parameters, adjust the step prompt to pass filters (e.g. `"only tasks assigned to me"`).
+
+---
+
 ## Getting Help
 
 1. Check the **browser console** (`F12 → Console`) for JavaScript errors

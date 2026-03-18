@@ -10,7 +10,9 @@ Hierarchical Planner AI decomposes a complex task into parallel, dependency-awar
 
 - **Hierarchical planning** — a Planner agent breaks any goal into 3–8 structured steps with explicit dependencies
 - **Specialist AI agents** — the Planner automatically assigns one of 12 domain experts (Backend Architect, Frontend Developer, AI Engineer, etc.) to each step; fully overridable in the review phase
-- **Agent Skills** — file-based system prompt packages (SKILL.md) that override a specialist's default prompt with a specific methodology; assignable per step or when redoing a step
+- **Agent Skills** — file-based system prompt packages (SKILL.md) that override a specialist's default prompt with a specific methodology; assignable per step or when redoing a step; the Planner auto-assigns the best skill when available
+- **MCP Client** — attach external MCP servers to individual steps; the Executor calls real tools (APIs, databases, services) during execution; server names are portable and preserved in saved/downloaded plans
+- **Save, download & upload plans** — save plans to the in-memory panel, export as self-contained JSON (includes name, task, assignments, MCP server names, provider info), and re-import on any instance; plans are version-control friendly
 - **Parallel wave execution** — independent steps run concurrently; dependent steps wait only for their specific prerequisites
 - **Real-time Kanban board** — watch steps move through Queue → Running → Done / Failed live, with the agent specialist shown on each card
 - **Per-step model selection** — assign a different LLM model to each step
@@ -151,10 +153,13 @@ hierarchy_pai/
 │   ├── hierarchy_pai/
 │   │   ├── agents/
 │   │   │   ├── agent_registry.ex  # 12 specialist personas + system prompts
-│   │   │   ├── planner.ex         # Decomposes task into JSON plan
-│   │   │   ├── executor.ex        # Runs a single step with specialist/skill prompt
+│   │   │   ├── planner.ex         # Decomposes task into JSON plan (skill-aware)
+│   │   │   ├── executor.ex        # Runs a single step with specialist/skill/MCP tools
 │   │   │   └── aggregator.ex      # Synthesises all step outputs
 │   │   ├── orchestrator.ex        # Wave-based parallel execution
+│   │   ├── mcp_client.ex          # HTTP MCP client (connect + call_tool)
+│   │   ├── mcp_server_store.ex    # ETS-backed registered MCP servers
+│   │   ├── plan_store.ex          # ETS-backed saved plans
 │   │   ├── provider_store.ex      # ETS-backed saved LLM provider configs
 │   │   ├── skill_store.ex         # ETS-backed skill loader (priv/skills/)
 │   │   └── llm_provider.ex        # Builds LangChain models per provider
@@ -201,6 +206,8 @@ mix assets.deploy     # build production assets
 | [LLM Provider Setup](doc/providers.md) | How to configure Jan.ai, Ollama, OpenAI, Anthropic |
 | [Specialist Agents](doc/agents.md) | All 12 agent types, their expertise, and how to assign them |
 | [Agent Skills](doc/skills.md) | SKILL.md format, seed skills, adding new skills via PR |
+| [MCP Client](doc/mcp-client.md) | Connecting external MCP servers to steps; tool-calling; portability |
+| [Plans: Save / Download / Upload](doc/plans.md) | Persisting, exporting, and importing plans; portable JSON format |
 | [Task Examples](doc/examples.md) | Sample prompts with expected outputs and agent assignments |
 | [Troubleshooting](doc/troubleshooting.md) | Common errors and how to fix them |
 | [MCP Server API](priv/TOOLS.md) | MCP endpoint, all 5 tools, request/response schemas |

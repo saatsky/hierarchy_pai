@@ -14,6 +14,8 @@ defmodule HierarchyPai.Application do
       HierarchyPai.ProviderStore,
       HierarchyPai.SkillStore,
       HierarchyPai.RunStore,
+      HierarchyPai.McpServerStore,
+      HierarchyPai.PlanStore,
       # Start to serve requests, typically the last entry
       HierarchyPaiWeb.Endpoint
     ]

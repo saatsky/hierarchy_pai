@@ -307,3 +307,72 @@ If using Jan.ai or Ollama with a large model:
 - Set **Chain retries** to `1` to avoid triple-length timeouts
 - Use **Cancel** if a step is stuck, then retry just that step
 - Consider using a smaller quantised model (Q4 vs Q8) for faster inference
+
+---
+
+## 🔌 Using the MCP Client
+
+> See [MCP Client](mcp-client.md) for full setup instructions.
+
+### Attach a live task-management server to a step
+
+Suppose you have a Collaboration MCP server running at `http://localhost:4000/mcp` that exposes tools like `GetMyTasks` and `UpdateTask`.
+
+1. Open the **MCP Servers** panel in the sidebar, click **+ Add Server**, enter the URL, and click **Connect**.
+2. Write a task such as:
+
+```
+Review all open tasks assigned to me this sprint, group them by priority,
+draft a short status update for each, and update the task descriptions
+with the new status text.
+```
+
+3. In the review phase, find the step that needs real task data (e.g. *"Retrieve current sprint tasks"*) and assign the connected MCP server to it via the **MCP Server** dropdown.
+4. Click **Run accepted steps** — the Executor will call `GetMyTasks` (or similar tools) and receive live data.
+
+**Tip:** If the MCP server returns very large payloads (thousands of tokens), responses are automatically truncated to 4 000 characters with a notice. Use a skill that instructs the agent to filter only relevant fields to get better results with large payloads.
+
+---
+
+### Auto-assigned skills via the Planner
+
+The Planner reads all available skills and automatically assigns the best one to each step. If you have a `collaboration-tasks` skill installed:
+
+```
+Review my open tasks, identify blockers, and draft a handoff summary
+for each task that is blocked.
+```
+
+The Planner will set `skill_id: "collaboration-tasks"` on relevant steps without manual intervention in the review phase. You can still override the assignment.
+
+---
+
+## 💾 Saving, Downloading & Uploading Plans
+
+> See [Plans: Save, Download & Upload](plans.md) for the full reference.
+
+### Reuse a plan across sessions
+
+1. Generate a plan for a common task (e.g. the blog post series example above).
+2. In the review phase, assign specialists, skills, and models you prefer.
+3. Click **Save Plan** — name it (e.g. `blog-series-template`).
+4. Click **Download Plan** — save the `.json` file to your project.
+
+On the next session (or another machine):
+1. Click **Upload Plan** (or drag-and-drop the JSON file).
+2. The plan is loaded into the review phase with all assignments restored.
+3. Change the task text, adjust any step titles, and run.
+
+### Share a plan as a template
+
+Downloaded plans are self-contained JSON. They include:
+- The task description and plan name
+- All steps with specialist and skill assignments
+- MCP server names (resolved to live IDs when re-imported)
+- The LLM provider name, type, and model (no API keys)
+
+Commit the JSON file to your repository and teammates can import it directly — no configuration needed beyond having the same MCP servers connected.
+
+### Tip: name plans for clarity
+
+Plans are saved and exported using the name you give them. Descriptive names like `sprint-review-with-jira` or `api-design-anthropic` make it easy to identify plans when uploading them later.

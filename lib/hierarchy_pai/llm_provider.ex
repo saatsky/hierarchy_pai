@@ -19,8 +19,8 @@ defmodule HierarchyPai.LLMProvider do
       }
   """
 
-  alias LangChain.ChatModels.ChatOpenAI
   alias LangChain.ChatModels.ChatAnthropic
+  alias LangChain.ChatModels.ChatOpenAI
 
   @jan_ai_base "http://127.0.0.1:1337"
   @ollama_base "http://127.0.0.1:11434"

@@ -1,11 +1,14 @@
 defmodule HierarchyPaiWeb.PlannerLive do
   use HierarchyPaiWeb, :live_view
 
-  alias HierarchyPai.LLMProvider
   alias HierarchyPai.Agents.AgentRegistry
+  alias HierarchyPai.LLMProvider
+  alias HierarchyPai.McpClient
+  alias HierarchyPai.McpServerStore
+  alias HierarchyPai.PlanStore
   alias HierarchyPai.ProviderStore
-  alias HierarchyPai.SkillStore
   alias HierarchyPai.RunStore
+  alias HierarchyPai.SkillStore
 
   @providers [
     {"Jan.ai (local)", :jan_ai},
@@ -73,7 +76,13 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:planner_provider_id, pick_default_provider_id(ProviderStore.list()))
      |> assign(:redo_confirm, nil)
      |> assign(:retry_confirm, nil)
-     |> assign(:mcp_runs, RunStore.list())}
+     |> assign(:mcp_runs, RunStore.list())
+     |> assign(:mcp_servers, McpServerStore.list())
+     |> assign(:mcp_server_form, nil)
+     |> assign(:step_mcp_servers, %{})
+     |> assign(:saved_plans, PlanStore.list())
+     |> assign(:save_plan_name, "")
+     |> assign(:save_plan_modal, false)}
   end
 
   @impl true
@@ -391,25 +400,13 @@ defmodule HierarchyPaiWeb.PlannerLive do
   def handle_event("start_execution", _params, socket) do
     accepted_step_ids = socket.assigns.accepted_steps
     plan = socket.assigns.plan
-    step_agent_types = socket.assigns.step_agent_types
-    step_skills = socket.assigns.step_skills
     step_configs = socket.assigns.step_configs
     default_config = build_provider_config(socket.assigns)
     resolved_step_configs = resolve_step_configs(step_configs, default_config)
     topic = socket.assigns.pubsub_topic
 
-    # Merge user-selected agent types and skills into each step before execution
-    plan_with_agents =
-      update_in(plan["steps"], fn steps ->
-        Enum.map(steps, fn step ->
-          agent_type = Map.get(step_agent_types, step["id"], step["agent_type"] || "executor")
-          skill_id = Map.get(step_skills, step["id"])
-
-          step
-          |> Map.put("agent_type", agent_type)
-          |> Map.put("skill_id", skill_id)
-        end)
-      end)
+    # Merge user-selected agent types, skills, and MCP server IDs into each step
+    plan_with_agents = enrich_plan_with_step_assigns(plan, socket.assigns)
 
     step_statuses =
       accepted_step_ids
@@ -677,6 +674,225 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:error, nil)}
   end
 
+  # ── MCP Server management ─────────────────────────────────────────────────
+
+  @impl true
+  def handle_event("open_mcp_server_form", _params, socket) do
+    blank = %{id: nil, name: "", url: ""}
+    {:noreply, assign(socket, :mcp_server_form, blank)}
+  end
+
+  @impl true
+  def handle_event("cancel_mcp_server_form", _params, socket) do
+    {:noreply, assign(socket, :mcp_server_form, nil)}
+  end
+
+  @impl true
+  def handle_event("mcp_server_form_change", %{"mcp_server" => params}, socket) do
+    current = socket.assigns.mcp_server_form
+
+    updated =
+      current
+      |> Map.put(:name, Map.get(params, "name", current.name))
+      |> Map.put(:url, Map.get(params, "url", current.url))
+
+    {:noreply, assign(socket, :mcp_server_form, updated)}
+  end
+
+  @impl true
+  def handle_event("save_mcp_server_form", %{"mcp_server" => params}, socket) do
+    current = socket.assigns.mcp_server_form
+
+    entry = %{
+      id: current[:id],
+      name: String.trim(Map.get(params, "name", "")),
+      url: String.trim(Map.get(params, "url", ""))
+    }
+
+    {:ok, _} = McpServerStore.save(entry)
+
+    {:noreply,
+     socket
+     |> assign(:mcp_servers, McpServerStore.list())
+     |> assign(:mcp_server_form, nil)}
+  end
+
+  @impl true
+  def handle_event("edit_mcp_server", %{"id" => id}, socket) do
+    entry = McpServerStore.get(id)
+    form = %{id: entry.id, name: entry.name, url: entry.url}
+    {:noreply, assign(socket, :mcp_server_form, form)}
+  end
+
+  @impl true
+  def handle_event("delete_mcp_server", %{"id" => id}, socket) do
+    :ok = McpServerStore.delete(id)
+    {:noreply, assign(socket, :mcp_servers, McpServerStore.list())}
+  end
+
+  @impl true
+  def handle_event("connect_mcp_server", %{"id" => id}, socket) do
+    :ok = McpServerStore.update_status(id, :checking)
+    pid = self()
+
+    Task.start(fn ->
+      case McpServerStore.get(id) do
+        nil ->
+          :ok
+
+        %{url: url} ->
+          result = McpClient.connect(url)
+          send(pid, {:mcp_server_connect_result, id, result})
+      end
+    end)
+
+    {:noreply, assign(socket, :mcp_servers, McpServerStore.list())}
+  end
+
+  @impl true
+  def handle_event("disconnect_mcp_server", %{"id" => id}, socket) do
+    :ok = McpServerStore.update_status(id, :disconnected, [], nil)
+    {:noreply, assign(socket, :mcp_servers, McpServerStore.list())}
+  end
+
+  @impl true
+  def handle_event(
+        "toggle_step_mcp_server",
+        %{"step_id" => step_id_str, "server_id" => server_id},
+        socket
+      ) do
+    step_id = String.to_integer(step_id_str)
+    current = Map.get(socket.assigns.step_mcp_servers, step_id, [])
+
+    updated_ids =
+      if server_id in current do
+        List.delete(current, server_id)
+      else
+        [server_id | current]
+      end
+
+    {:noreply, update(socket, :step_mcp_servers, &Map.put(&1, step_id, updated_ids))}
+  end
+
+  # ── Plan save / export / import ───────────────────────────────────────────
+
+  @impl true
+  def handle_event("open_save_plan_modal", _params, socket) do
+    {:noreply, assign(socket, :save_plan_modal, true)}
+  end
+
+  @impl true
+  def handle_event("close_save_plan_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:save_plan_modal, false)
+     |> assign(:save_plan_name, "")}
+  end
+
+  @impl true
+  def handle_event("update_save_plan_name", %{"value" => name}, socket) do
+    {:noreply, assign(socket, :save_plan_name, name)}
+  end
+
+  @impl true
+  def handle_event("save_plan", _params, socket) do
+    name = String.trim(socket.assigns.save_plan_name)
+    plan = socket.assigns.plan
+    task = socket.assigns.task
+
+    if name == "" or is_nil(plan) do
+      {:noreply, socket}
+    else
+      enriched = enrich_plan_for_export(plan, socket.assigns, name)
+      {:ok, _} = PlanStore.save(name, task, enriched)
+
+      {:noreply,
+       socket
+       |> assign(:saved_plans, PlanStore.list())
+       |> assign(:save_plan_modal, false)
+       |> assign(:save_plan_name, "")
+       |> put_flash(:info, "Plan \"#{name}\" saved.")}
+    end
+  end
+
+  @impl true
+  def handle_event("delete_saved_plan", %{"id" => id}, socket) do
+    :ok = PlanStore.delete(id)
+    {:noreply, assign(socket, :saved_plans, PlanStore.list())}
+  end
+
+  @impl true
+  def handle_event("download_plan", _params, socket) do
+    plan = socket.assigns.plan
+
+    if plan do
+      # Use the current save_plan_name if the modal was just used; otherwise fall
+      # back to an empty string so enrich_plan_for_export derives the name from goal.
+      export_name = String.trim(socket.assigns.save_plan_name)
+      enriched = enrich_plan_for_export(plan, socket.assigns, export_name)
+      json = Jason.encode!(enriched, pretty: true)
+      slug = plan["goal"] |> String.slice(0, 30) |> String.replace(~r/[^a-zA-Z0-9]+/, "-")
+      filename = "plan-#{slug}.json"
+
+      {:noreply,
+       push_event(socket, "download_file", %{
+         filename: filename,
+         content: json,
+         mime: "application/json"
+       })}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("plan_uploaded", %{"plan" => plan}, socket) do
+    if is_map(plan) and Map.has_key?(plan, "goal") and Map.has_key?(plan, "steps") do
+      task = plan["task"] || ""
+      name = String.trim(plan["name"] || "")
+
+      socket =
+        if name != "" do
+          {:ok, _} = PlanStore.save(name, task, plan)
+          assign(socket, :saved_plans, PlanStore.list())
+        else
+          socket
+        end
+
+      {:noreply, load_plan_into_planner(socket, if(task != "", do: task), plan)}
+    else
+      {:noreply,
+       put_flash(socket, :error, "Invalid plan JSON: must have \"goal\" and \"steps\" keys.")}
+    end
+  end
+
+  @impl true
+  def handle_event("load_saved_plan", %{"id" => id}, socket) do
+    case PlanStore.get(id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Saved plan not found.")}
+
+      %{task: task, plan: plan} ->
+        {:noreply, load_plan_into_planner(socket, task, plan)}
+    end
+  end
+
+  # ── Plan replay from run history ──────────────────────────────────────────
+
+  @impl true
+  def handle_event("replay_plan", %{"run_id" => run_id}, socket) do
+    case RunStore.get(run_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Run not found.")}
+
+      %{plan: nil} ->
+        {:noreply, put_flash(socket, :error, "No plan stored for this run.")}
+
+      %{task: task, plan: plan} ->
+        {:noreply, load_plan_into_planner(socket, task, plan)}
+    end
+  end
+
   @impl true
   def handle_event("provider_model_selected", %{"model" => model}, socket) do
     {:noreply, assign(socket, :model, model)}
@@ -749,17 +965,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
     # Override agent_type and skill_id on the plan for the redo step
     plan =
-      update_in(socket.assigns.plan, ["steps"], fn steps ->
-        Enum.map(steps, fn step ->
-          if step["id"] == step_id do
-            step
-            |> Map.put("agent_type", redo_agent_type)
-            |> Map.put("skill_id", redo_skill_id)
-          else
-            step
-          end
-        end)
-      end)
+      override_plan_steps(socket.assigns.plan, [step_id], %{
+        "agent_type" => redo_agent_type,
+        "skill_id" => redo_skill_id
+      })
 
     step_configs = socket.assigns.step_configs
     default_config = build_provider_config(socket.assigns)
@@ -890,17 +1099,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
 
     # Apply the chosen agent_type and skill_id overrides to all retried steps in the plan.
     plan =
-      update_in(socket.assigns.plan, ["steps"], fn steps ->
-        Enum.map(steps, fn step ->
-          if step["id"] in failed_ids do
-            step
-            |> Map.put("agent_type", retry_agent_type)
-            |> Map.put("skill_id", retry_skill_id)
-          else
-            step
-          end
-        end)
-      end)
+      override_plan_steps(socket.assigns.plan, failed_ids, %{
+        "agent_type" => retry_agent_type,
+        "skill_id" => retry_skill_id
+      })
 
     step_configs = socket.assigns.step_configs
     default_config = build_provider_config(socket.assigns)
@@ -1302,6 +1504,16 @@ defmodule HierarchyPaiWeb.PlannerLive do
     {:noreply, assign(socket, :mcp_runs, RunStore.list())}
   end
 
+  def handle_info({:mcp_server_connect_result, id, {:ok, tools}}, socket) do
+    :ok = McpServerStore.update_status(id, :connected, tools, nil)
+    {:noreply, assign(socket, :mcp_servers, McpServerStore.list())}
+  end
+
+  def handle_info({:mcp_server_connect_result, id, {:error, reason}}, socket) do
+    :ok = McpServerStore.update_status(id, :error, [], reason)
+    {:noreply, assign(socket, :mcp_servers, McpServerStore.list())}
+  end
+
   def handle_info({:provider_form_models_result, result}, socket) do
     pf = socket.assigns.provider_form
 
@@ -1334,6 +1546,169 @@ defmodule HierarchyPaiWeb.PlannerLive do
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # ── Helpers ────────────────────────────────────────────────────────────────
+
+  # Loads a plan into the planner UI in review state.
+  # Replicates the assigns set by the {:plan_ready, plan} PubSub event so that
+  # the step review screen appears immediately, ready for execution.
+  # Optionally updates @task if a task string is provided (nil keeps existing).
+  defp load_plan_into_planner(socket, task_or_nil, plan) do
+    all_ids = plan["steps"] |> Enum.map(& &1["id"]) |> MapSet.new()
+
+    agent_types =
+      Map.new(plan["steps"] || [], fn s ->
+        {s["id"], s["agent_type"] || "executor"}
+      end)
+
+    step_skills =
+      Map.new(plan["steps"] || [], fn s ->
+        {s["id"], s["skill_id"]}
+      end)
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
+
+    # Build name→id index for resolving portable mcp_server_names from the plan.
+    # Fall back to raw mcp_server_ids for backward compatibility with old-format plans.
+    name_to_id =
+      Map.new(McpServerStore.list(), fn s -> {s.name, s.id} end)
+
+    step_mcp_servers =
+      Map.new(plan["steps"] || [], fn s ->
+        {s["id"], resolve_mcp_server_ids(s, name_to_id)}
+      end)
+      |> Map.reject(fn {_k, v} -> v == [] end)
+
+    socket
+    |> then(fn s ->
+      if task_or_nil, do: assign(s, :task, task_or_nil), else: s
+    end)
+    |> assign(:plan, plan)
+    |> assign(:accepted_steps, all_ids)
+    |> assign(:step_configs, %{})
+    |> assign(:step_agent_types, agent_types)
+    |> assign(:step_skills, step_skills)
+    |> assign(:step_mcp_servers, step_mcp_servers)
+    |> assign(:status, :review_plan)
+    |> assign(:planner_stream, "")
+    |> assign(:elapsed_seconds, 0)
+    |> assign(:step_results, [])
+    |> assign(:step_statuses, %{})
+    |> assign(:step_errors, %{})
+    |> assign(:step_outputs, %{})
+    |> assign(:step_streams, %{})
+    |> assign(:selected_step_id, nil)
+    |> assign(:current_step_id, nil)
+    |> assign(:final_answer, nil)
+    |> assign(:error, nil)
+  end
+
+  # Used by start_execution (and retry paths) — keeps mcp_server_ids so the
+  # Executor can look up server entries by ID at runtime.
+  defp enrich_plan_with_step_assigns(plan, assigns) do
+    step_agent_types = assigns.step_agent_types
+    step_skills = assigns.step_skills
+    step_mcp_servers = assigns.step_mcp_servers
+
+    update_in(plan["steps"], fn steps ->
+      Enum.map(steps, fn step ->
+        agent_type = Map.get(step_agent_types, step["id"], step["agent_type"] || "executor")
+        skill_id = Map.get(step_skills, step["id"])
+        mcp_server_ids = Map.get(step_mcp_servers, step["id"], [])
+
+        step
+        |> Map.put("agent_type", agent_type)
+        |> Map.put("skill_id", skill_id)
+        |> Map.put("mcp_server_ids", mcp_server_ids)
+      end)
+    end)
+  end
+
+  # Used by save_plan and download_plan — converts mcp_server_ids to portable
+  # human-readable names so the exported JSON is not tied to ephemeral ETS IDs.
+  # Also embeds "name" and "task" so the file is self-contained when re-imported.
+  defp enrich_plan_for_export(plan, assigns, plan_name) do
+    step_agent_types = assigns.step_agent_types
+    step_skills = assigns.step_skills
+    step_mcp_servers = assigns.step_mcp_servers
+
+    id_to_name = Map.new(McpServerStore.list(), fn s -> {s.id, s.name} end)
+
+    enriched_steps =
+      update_in(plan["steps"], fn steps ->
+        Enum.map(steps, fn step ->
+          agent_type = Map.get(step_agent_types, step["id"], step["agent_type"] || "executor")
+          skill_id = Map.get(step_skills, step["id"])
+          mcp_server_ids = Map.get(step_mcp_servers, step["id"], [])
+
+          mcp_server_names = map_ids_to_names(mcp_server_ids, id_to_name)
+
+          step
+          |> Map.put("agent_type", agent_type)
+          |> Map.put("skill_id", skill_id)
+          |> Map.put("mcp_server_names", mcp_server_names)
+          |> Map.delete("mcp_server_ids")
+        end)
+      end)
+
+    name = if plan_name != "", do: plan_name, else: plan["goal"] || ""
+
+    provider_info =
+      case assigns.planner_provider_id && ProviderStore.get(assigns.planner_provider_id) do
+        nil ->
+          nil
+
+        entry ->
+          %{
+            "name" => entry.name,
+            "type" => Atom.to_string(entry.provider),
+            "model" => entry.model
+          }
+      end
+
+    enriched_steps
+    |> Map.put("name", name)
+    |> Map.put("task", assigns.task)
+    |> then(fn m -> if provider_info, do: Map.put(m, "provider", provider_info), else: m end)
+  end
+
+  defp override_plan_steps(plan, step_ids, attrs) do
+    Map.update!(plan, "steps", &apply_step_overrides(&1, step_ids, attrs))
+  end
+
+  defp apply_step_overrides(steps, step_ids, attrs) do
+    Enum.map(steps, fn step ->
+      if step["id"] in step_ids, do: Map.merge(step, attrs), else: step
+    end)
+  end
+
+  defp resolve_mcp_server_ids(%{"mcp_server_names" => names}, name_to_id) when is_list(names) do
+    for name <- names, {:ok, id} <- [Map.fetch(name_to_id, name)], do: id
+  end
+
+  defp resolve_mcp_server_ids(%{"mcp_server_ids" => ids}, _) when is_list(ids), do: ids
+  defp resolve_mcp_server_ids(_, _), do: []
+
+  defp map_ids_to_names(ids, id_to_name) do
+    for id <- ids, {:ok, name} <- [Map.fetch(id_to_name, id)], do: name
+  end
+
+  defp build_config_from_entry(entry, model, max_retries) do
+    base = %{
+      provider: entry.provider,
+      model: model,
+      api_key: entry.api_key,
+      max_retries: max_retries
+    }
+
+    cond do
+      entry.provider in [:custom, :github_copilot] and entry.endpoint != "" ->
+        Map.put(base, :endpoint, entry.endpoint)
+
+      LLMProvider.local_provider?(entry.provider) and entry.endpoint != "" ->
+        Map.put(base, :local_base, entry.endpoint)
+
+      true ->
+        base
+    end
+  end
 
   defp build_provider_config(assigns) do
     entry = assigns.planner_provider_id && ProviderStore.get(assigns.planner_provider_id)
@@ -1368,40 +1743,25 @@ defmodule HierarchyPaiWeb.PlannerLive do
   # Resolve step_configs that reference ETS entries (provider_id) into full configs.
   defp resolve_step_configs(step_configs, default_config) do
     Map.new(step_configs, fn {step_id, cfg} ->
-      resolved =
-        case cfg do
-          %{provider_id: pid, model: model} ->
-            case ProviderStore.get(pid) do
-              nil ->
-                default_config
-
-              entry ->
-                base = %{
-                  provider: entry.provider,
-                  model: model,
-                  api_key: entry.api_key,
-                  max_retries: Map.get(entry, :max_retries, default_config.max_retries)
-                }
-
-                cond do
-                  entry.provider in [:custom, :github_copilot] and entry.endpoint != "" ->
-                    Map.put(base, :endpoint, entry.endpoint)
-
-                  LLMProvider.local_provider?(entry.provider) and entry.endpoint != "" ->
-                    Map.put(base, :local_base, entry.endpoint)
-
-                  true ->
-                    base
-                end
-            end
-
-          full_cfg ->
-            full_cfg
-        end
-
-      {step_id, resolved}
+      {step_id, resolve_step_config(cfg, default_config)}
     end)
   end
+
+  defp resolve_step_config(%{provider_id: pid, model: model}, default_config) do
+    case ProviderStore.get(pid) do
+      nil ->
+        default_config
+
+      entry ->
+        build_config_from_entry(
+          entry,
+          model,
+          Map.get(entry, :max_retries, default_config.max_retries)
+        )
+    end
+  end
+
+  defp resolve_step_config(full_cfg, _default_config), do: full_cfg
 
   defp pick_default_provider_id([]), do: nil
 
@@ -1497,6 +1857,45 @@ defmodule HierarchyPaiWeb.PlannerLive do
     </script>
     <Layouts.app flash={@flash}>
       <div class="min-h-screen bg-gradient-to-br from-base-300 via-base-200 to-base-100 text-base-content">
+        <%!-- Save Plan modal --%>
+        <%= if @save_plan_modal do %>
+          <div
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            id="save-plan-modal"
+          >
+            <div class="bg-base-100 rounded-2xl shadow-2xl border border-base-300/50 p-6 w-full max-w-sm space-y-4">
+              <h3 class="text-base font-bold text-base-content/90 flex items-center gap-2">
+                <.icon name="hero-bookmark" class="w-5 h-5 text-amber-400" /> Save Plan
+              </h3>
+              <p class="text-xs text-base-content/60">{@plan["goal"]}</p>
+              <input
+                id="save-plan-name-input"
+                type="text"
+                placeholder="Plan name…"
+                value={@save_plan_name}
+                phx-keyup="update_save_plan_name"
+                phx-key="Enter"
+                phx-blur="update_save_plan_name"
+                class="w-full bg-base-200 border border-amber-700/40 rounded-xl text-sm text-base-content px-3 py-2 focus:outline-none focus:ring-1 focus:ring-amber-500 placeholder-base-content/30"
+              />
+              <div class="flex gap-3 justify-end">
+                <button
+                  phx-click="close_save_plan_modal"
+                  class="px-4 py-2 rounded-xl text-sm font-medium bg-base-200 hover:bg-base-300 text-base-content/70 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  phx-click="save_plan"
+                  disabled={String.trim(@save_plan_name) == ""}
+                  class="px-4 py-2 rounded-xl text-sm font-medium bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        <% end %>
         <%!-- Header --%>
         <header class="border-b border-base-300/50 bg-base-300/80 backdrop-blur-sm sticky top-0 z-10">
           <div class="w-full px-6 py-4 flex items-center justify-between">
@@ -1870,6 +2269,265 @@ defmodule HierarchyPaiWeb.PlannerLive do
                 <% end %>
               </div>
 
+              <%!-- MCP Servers panel --%>
+              <div
+                class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3"
+                id="mcp-servers-panel"
+              >
+                <div class="flex items-center justify-between">
+                  <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
+                    <.icon name="hero-server" class="w-3.5 h-3.5 text-cyan-400" /> MCP Servers
+                    <%= if @mcp_servers != [] do %>
+                      <span class="ml-1 bg-cyan-100 text-cyan-700 dark:bg-cyan-600/30 dark:text-cyan-300 text-xs px-1.5 py-0.5 rounded-full font-mono">
+                        {length(@mcp_servers)}
+                      </span>
+                    <% end %>
+                  </p>
+                  <button
+                    phx-click="open_mcp_server_form"
+                    class="text-base-content/50 hover:text-cyan-400 transition-colors"
+                    title="Add MCP Server"
+                  >
+                    <.icon name="hero-plus" class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <%!-- Add / Edit form --%>
+                <%= if @mcp_server_form do %>
+                  <form
+                    phx-submit="save_mcp_server_form"
+                    phx-change="mcp_server_form_change"
+                    id="mcp-server-form"
+                    class="space-y-2"
+                  >
+                    <input
+                      type="text"
+                      name="mcp_server[name]"
+                      value={@mcp_server_form.name}
+                      placeholder="Name (e.g. Brave Search)"
+                      class="w-full bg-base-300 border border-cyan-700/40 rounded text-xs text-base-content px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500 placeholder-base-content/30"
+                    />
+                    <input
+                      type="url"
+                      name="mcp_server[url]"
+                      value={@mcp_server_form.url}
+                      placeholder="http://host/mcp"
+                      class="w-full bg-base-300 border border-cyan-700/40 rounded text-xs text-base-content px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500 placeholder-base-content/30"
+                    />
+                    <div class="flex gap-2">
+                      <button
+                        type="submit"
+                        class="flex-1 px-2 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium transition-colors"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        phx-click="cancel_mcp_server_form"
+                        class="px-2 py-1.5 rounded-lg bg-base-100/60 hover:bg-base-200/60 border border-base-content/20 text-base-content/60 text-xs transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                <% end %>
+
+                <%!-- Collapsible server list --%>
+                <details class="group">
+                  <summary class="text-xs text-base-content/50 cursor-pointer hover:text-base-content/70 select-none flex items-center gap-1 transition-colors">
+                    <.icon
+                      name="hero-chevron-right"
+                      class="w-3 h-3 transition-transform group-open:rotate-90"
+                    />
+                    <%= if @mcp_servers == [] do %>
+                      No servers yet
+                    <% else %>
+                      Show servers
+                    <% end %>
+                  </summary>
+                  <div class="mt-2 space-y-0.5">
+                    <%!-- Empty state --%>
+                    <%= if @mcp_servers == [] do %>
+                      <div class="text-center py-3">
+                        <p class="text-xs text-base-content/40">No MCP servers yet.</p>
+                        <p class="text-xs text-base-content/30 mt-0.5">
+                          Add one to let steps call external tools.
+                        </p>
+                      </div>
+                    <% end %>
+
+                    <%!-- Server list --%>
+                    <%= for srv <- @mcp_servers do %>
+                      <div class="flex items-center gap-2 py-1.5 border-b border-base-300/30 last:border-0">
+                        <%!-- Status indicator --%>
+                        <span class={[
+                          "w-2 h-2 rounded-full shrink-0",
+                          case srv.status do
+                            :connected -> "bg-emerald-400"
+                            :checking -> "bg-amber-400 animate-pulse"
+                            :error -> "bg-red-400"
+                            _ -> "bg-base-content/30"
+                          end
+                        ]}>
+                        </span>
+                        <%!-- Server info --%>
+                        <div class="flex-1 min-w-0">
+                          <p class="text-xs font-medium text-base-content/90 truncate">{srv.name}</p>
+                          <p class="text-xs text-base-content/40 truncate">{srv.url}</p>
+                          <%= if srv.status == :error and srv.error do %>
+                            <p class="text-xs text-red-400 truncate" title={srv.error}>{srv.error}</p>
+                          <% end %>
+                          <%= if srv.status == :connected do %>
+                            <p class="text-xs text-emerald-400">
+                              {srv.tool_count} tool{if srv.tool_count != 1, do: "s"}
+                            </p>
+                          <% end %>
+                        </div>
+                        <%!-- Connect / Disconnect --%>
+                        <%= if srv.status in [:disconnected, :error] do %>
+                          <button
+                            phx-click="connect_mcp_server"
+                            phx-value-id={srv.id}
+                            class="text-xs text-cyan-400 hover:text-cyan-300 shrink-0 transition-colors"
+                            title="Connect"
+                          >
+                            <.icon name="hero-bolt" class="w-3.5 h-3.5" />
+                          </button>
+                        <% end %>
+                        <%= if srv.status == :connected do %>
+                          <button
+                            phx-click="disconnect_mcp_server"
+                            phx-value-id={srv.id}
+                            class="text-xs text-base-content/40 hover:text-amber-400 shrink-0 transition-colors"
+                            title="Disconnect"
+                          >
+                            <.icon name="hero-x-circle" class="w-3.5 h-3.5" />
+                          </button>
+                        <% end %>
+                        <%= if srv.status == :checking do %>
+                          <span class="text-xs text-amber-400 shrink-0">…</span>
+                        <% end %>
+                        <%!-- Edit / Delete --%>
+                        <button
+                          phx-click="edit_mcp_server"
+                          phx-value-id={srv.id}
+                          class="text-base-content/40 hover:text-base-content/70 transition-colors shrink-0"
+                          title="Edit"
+                        >
+                          <.icon name="hero-pencil-square" class="w-3 h-3" />
+                        </button>
+                        <button
+                          phx-click="delete_mcp_server"
+                          phx-value-id={srv.id}
+                          data-confirm="Delete this MCP server?"
+                          class="text-base-content/40 hover:text-red-400 transition-colors shrink-0"
+                          title="Delete"
+                        >
+                          <.icon name="hero-trash" class="w-3 h-3" />
+                        </button>
+                      </div>
+                    <% end %>
+                  </div>
+                </details>
+              </div>
+
+              <%!-- Saved Plans panel --%>
+              <div
+                class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3"
+                id="saved-plans-panel"
+              >
+                <div class="flex items-center justify-between">
+                  <p class="text-xs font-semibold text-base-content/80 flex items-center gap-1.5">
+                    <.icon name="hero-bookmark" class="w-3.5 h-3.5 text-amber-400" /> Saved Plans
+                    <%= if @saved_plans != [] do %>
+                      <span class="ml-1 bg-amber-100 text-amber-700 dark:bg-amber-600/30 dark:text-amber-300 text-xs px-1.5 py-0.5 rounded-full font-mono">
+                        {length(@saved_plans)}
+                      </span>
+                    <% end %>
+                  </p>
+                  <%!-- Upload JSON plan --%>
+                  <label
+                    id="upload-plan-label"
+                    phx-hook=".UploadPlan"
+                    class="cursor-pointer text-base-content/50 hover:text-amber-400 transition-colors"
+                    title="Upload plan from JSON"
+                  >
+                    <.icon name="hero-arrow-up-tray" class="w-3.5 h-3.5" />
+                    <input type="file" accept=".json" class="sr-only" />
+                  </label>
+                </div>
+                <script :type={Phoenix.LiveView.ColocatedHook} name=".UploadPlan">
+                  export default {
+                    mounted() {
+                      const input = this.el.querySelector("input[type=file]");
+                      input.addEventListener("change", (e) => {
+                        const file = e.target.files[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (evt) => {
+                          try {
+                            const plan = JSON.parse(evt.target.result);
+                            this.pushEvent("plan_uploaded", { plan });
+                          } catch (_) {
+                            alert("Invalid JSON file.");
+                          }
+                        };
+                        reader.readAsText(file);
+                        // Reset so the same file can be re-uploaded
+                        input.value = "";
+                      });
+                    }
+                  }
+                </script>
+
+                <details class="group">
+                  <summary class="text-xs text-base-content/50 cursor-pointer hover:text-base-content/70 select-none flex items-center gap-1 transition-colors">
+                    <.icon
+                      name="hero-chevron-right"
+                      class="w-3 h-3 transition-transform group-open:rotate-90"
+                    />
+                    <%= if @saved_plans == [] do %>
+                      No saved plans yet
+                    <% else %>
+                      Show plans
+                    <% end %>
+                  </summary>
+                  <div class="mt-2 space-y-0.5">
+                    <%= if @saved_plans == [] do %>
+                      <p class="text-xs text-base-content/40 text-center py-2">No saved plans yet.</p>
+                    <% end %>
+
+                    <%= for sp <- @saved_plans do %>
+                      <div class="flex items-center gap-2 py-1.5 border-b border-base-300/30 last:border-0">
+                        <div class="flex-1 min-w-0">
+                          <p class="text-xs font-medium text-base-content/80 truncate">{sp.name}</p>
+                          <p class="text-xs text-base-content/40 truncate" title={sp.task}>
+                            {sp.task}
+                          </p>
+                        </div>
+                        <button
+                          phx-click="load_saved_plan"
+                          phx-value-id={sp.id}
+                          class="text-base-content/40 hover:text-amber-400 transition-colors shrink-0"
+                          title="Load into planner"
+                        >
+                          <.icon name="hero-play" class="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          phx-click="delete_saved_plan"
+                          phx-value-id={sp.id}
+                          data-confirm={"Delete saved plan \"#{sp.name}\"?"}
+                          class="text-base-content/40 hover:text-red-400 transition-colors shrink-0"
+                          title="Delete"
+                        >
+                          <.icon name="hero-trash" class="w-3 h-3" />
+                        </button>
+                      </div>
+                    <% end %>
+                  </div>
+                </details>
+              </div>
+
               <%!-- Agent Specialists panel --%>
               <div class="bg-base-200/40 border border-base-300/30 rounded-2xl p-4 space-y-3">
                 <div class="flex items-center justify-between">
@@ -2135,6 +2793,17 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         >
                           {run.task}
                         </p>
+                        <%!-- Replay button — only for done runs with a stored plan --%>
+                        <%= if run.status == :done and not is_nil(run.plan) do %>
+                          <button
+                            phx-click="replay_plan"
+                            phx-value-run_id={run.id}
+                            class="text-base-content/40 hover:text-violet-400 transition-colors shrink-0"
+                            title="Load plan into planner"
+                          >
+                            <.icon name="hero-arrow-path" class="w-3.5 h-3.5" />
+                          </button>
+                        <% end %>
                         <span class={[
                           "text-xs px-1.5 py-0.5 rounded font-mono shrink-0",
                           case run.status do
@@ -2289,6 +2958,20 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       </span>
                     </div>
                     <div class="flex items-center gap-2">
+                      <button
+                        phx-click="download_plan"
+                        class="px-3 py-1.5 text-xs font-medium rounded-lg bg-base-100/60 hover:bg-amber-900/30 border border-base-content/20 hover:border-amber-700/50 text-base-content/60 hover:text-amber-300 transition-colors flex items-center gap-1.5"
+                        title="Download plan as JSON"
+                      >
+                        <.icon name="hero-arrow-down-tray" class="w-3.5 h-3.5" /> Export
+                      </button>
+                      <button
+                        phx-click="open_save_plan_modal"
+                        class="px-3 py-1.5 text-xs font-medium rounded-lg bg-base-100/60 hover:bg-amber-900/30 border border-base-content/20 hover:border-amber-700/50 text-base-content/60 hover:text-amber-300 transition-colors flex items-center gap-1.5"
+                        title="Save plan to library"
+                      >
+                        <.icon name="hero-bookmark" class="w-3.5 h-3.5" /> Save
+                      </button>
                       <button
                         phx-click="cancel"
                         class="px-3 py-1.5 text-xs font-medium rounded-lg bg-base-100/60 hover:bg-red-900/40 border border-base-content/20 hover:border-red-700/50 text-base-content/60 hover:text-red-300 transition-colors flex items-center gap-1.5"
@@ -2509,6 +3192,44 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                       <% end %>
                                     </select>
                                   </form>
+                                <% end %>
+                                <%!-- MCP server selector --%>
+                                <%= if @mcp_servers != [] do %>
+                                  <div class="mt-1.5 space-y-1">
+                                    <span class="text-xs text-base-content/50">MCP Tools:</span>
+                                    <%= for srv <- @mcp_servers do %>
+                                      <% selected_ids = Map.get(@step_mcp_servers, step["id"], []) %>
+                                      <% checked = srv.id in selected_ids %>
+                                      <label class="flex items-center gap-2 cursor-pointer group">
+                                        <input
+                                          type="checkbox"
+                                          phx-click="toggle_step_mcp_server"
+                                          phx-value-step_id={step["id"]}
+                                          phx-value-server_id={srv.id}
+                                          checked={checked}
+                                          class="rounded border-cyan-600 text-cyan-500 bg-base-300 focus:ring-cyan-500"
+                                        />
+                                        <span class={[
+                                          "text-xs",
+                                          if(srv.status == :connected,
+                                            do: "text-base-content/80",
+                                            else: "text-base-content/40"
+                                          )
+                                        ]}>
+                                          {srv.name}
+                                          <%= if srv.status == :connected do %>
+                                            <span class="text-emerald-400 ml-0.5">
+                                              ({srv.tool_count})
+                                            </span>
+                                          <% else %>
+                                            <span class="text-base-content/30 ml-0.5">
+                                              (not connected)
+                                            </span>
+                                          <% end %>
+                                        </span>
+                                      </label>
+                                    <% end %>
+                                  </div>
                                 <% end %>
                               </div>
                             </div>
