@@ -246,6 +246,41 @@ On Linux, this requires Docker Engine ≥ 20.10. The `docker-compose.yml` alread
 
 ---
 
+## User Input During Execution
+
+### Step is stuck in the Waiting column and won't move
+
+**Cause**: The agent called `request_user_input` and is blocking until a response is received.
+
+**Fix**: Scroll to the **Waiting** column on the Execution Board, read the question on the step card, type your answer in the textarea, and click **Submit**.
+
+If you accidentally closed or refreshed the page, the executor Task is still blocked in the background. Re-opening the same session URL will restore the LiveView state and you can submit the answer. If the tab was fully closed, the 5-minute timeout will eventually fire and execution will continue with `"(no answer — user did not respond)"` in context.
+
+---
+
+### Step resumed after timeout but output is wrong or incomplete
+
+**Cause**: The 5-minute timeout fired before you submitted an answer. The LLM received `"(no answer — user did not respond within 5 minutes)"` as the tool result and had to make assumptions.
+
+**Fix**: Use **Redo** on the completed step. The agent will call `request_user_input` again — this time submit your answer promptly.
+
+---
+
+### Agent never asks for input even though the task needs it
+
+**Cause**: Some smaller quantised models (≤ 4B parameters, heavily quantised Q2/Q3) do not reliably follow tool-calling instructions and may skip the tool entirely.
+
+**Fixes**:
+1. Switch to a larger or better-quantised model (Q4_K_M or above, 7B+)
+2. Use a cloud model (OpenAI, Anthropic) for steps that require user input — these reliably call tools
+3. Write a Skill that explicitly instructs the agent to call `request_user_input` as its first action:
+
+```markdown
+Before writing anything, call the request_user_input tool with your most important clarifying question.
+```
+
+---
+
 ## Plans Issues
 
 ### Uploaded plan doesn't restore MCP server assignments

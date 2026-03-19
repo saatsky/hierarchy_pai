@@ -334,6 +334,31 @@ with the new status text.
 
 ---
 
+### Agent-triggered user input during execution
+
+The `request_user_input` tool is always available to the LLM. Use prompts that involve personalised or context-specific output to reliably trigger it:
+
+```
+Write a personalised onboarding plan for a new engineer joining my team.
+Include: a welcome message addressed to them by name, a day-by-day schedule
+for their first week, a list of systems and repos they need access to,
+and a 30-60-90 day goals document aligned with our team's current focus.
+```
+
+The step tasked with writing the welcome message cannot proceed without the engineer's name and team. The LLM will call `request_user_input` with:
+
+> *"What is the new engineer's name and role? Which team are they joining and what is their start date?"*
+
+The step card moves from **Running → Waiting** (amber column). Type your answer (e.g. `"Ana Silva, backend engineer, Platform team, starting Monday"`) and click **Submit**. The card moves back to Running and the output will use your answer.
+
+**Tips:**
+- Use a capable model (7B+ local, or any cloud model) — smaller quantised models sometimes skip tool calls
+- Multiple steps can be in Waiting simultaneously; each has its own independent form
+- If you don't respond within 5 minutes, execution continues with a "no answer" notice in context
+- A Skill can explicitly instruct the agent to always call `request_user_input` at the start (useful for templated workflows)
+
+---
+
 ### Auto-assigned skills via the Planner
 
 The Planner reads all available skills and automatically assigns the best one to each step. If you have a `collaboration-tasks` skill installed:
