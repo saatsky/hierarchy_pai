@@ -971,14 +971,16 @@ defmodule HierarchyPaiWeb.PlannerLive do
   end
 
   @impl true
-  def handle_event("confirm_redo_step", _params, socket) do
-    %{
-      step_id: step_id,
-      also_ids: also_ids,
-      redo_agent_type: redo_agent_type,
-      redo_skill_id: redo_skill_id
-    } =
-      socket.assigns.redo_confirm
+  def handle_event("confirm_redo_step", params, socket) do
+    %{step_id: step_id, also_ids: also_ids} = socket.assigns.redo_confirm
+
+    redo_agent_type = Map.get(params, "agent_type", "executor")
+
+    redo_skill_id =
+      case Map.get(params, "skill_id", "") do
+        "" -> nil
+        id -> id
+      end
 
     all_redo_ids = MapSet.new([step_id | also_ids])
 
@@ -1107,12 +1109,16 @@ defmodule HierarchyPaiWeb.PlannerLive do
   end
 
   @impl true
-  def handle_event("confirm_retry_steps", _params, socket) do
-    %{
-      failed_ids: failed_ids,
-      retry_agent_type: retry_agent_type,
-      retry_skill_id: retry_skill_id
-    } = socket.assigns.retry_confirm
+  def handle_event("confirm_retry_steps", params, socket) do
+    %{failed_ids: failed_ids} = socket.assigns.retry_confirm
+
+    retry_agent_type = Map.get(params, "agent_type", "executor")
+
+    retry_skill_id =
+      case Map.get(params, "skill_id", "") do
+        "" -> nil
+        id -> id
+      end
 
     incomplete_ids = MapSet.new(failed_ids)
 
@@ -3705,106 +3711,103 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         <.icon name="hero-x-mark" class="w-5 h-5" />
                       </button>
                     </div>
-                    <div class="p-6 space-y-4">
-                      <p class="text-sm text-base-content/80">
-                        You are about to re-run:
-                      </p>
-                      <div class="bg-violet-50 border border-violet-300 dark:bg-violet-900/20 dark:border-violet-700/40 rounded-lg p-3">
-                        <p class="text-xs font-bold text-violet-600 dark:text-violet-400 mb-0.5">
-                          #{redo_step && redo_step["id"]}
+                    <form id="redo-confirm-form" phx-submit="confirm_redo_step">
+                      <div class="p-6 space-y-4">
+                        <p class="text-sm text-base-content/80">
+                          You are about to re-run:
                         </p>
-                        <p class="text-sm font-medium text-base-content/90">
-                          {redo_step && redo_step["title"]}
-                        </p>
-                      </div>
-                      <%!-- Specialist and Skill overrides --%>
-                      <div class="rounded-lg border border-base-300/50 bg-base-100/30 p-3 space-y-2">
-                        <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1">
-                          Override for this redo
-                        </p>
-                        <form
-                          phx-change="update_redo_agent_type"
-                          id="redo-agent-type-form"
-                          class="flex items-center gap-2"
-                        >
-                          <span class="text-xs text-base-content/50 shrink-0 w-20">Specialist:</span>
-                          <select
-                            name="agent_type"
-                            class="flex-1 bg-base-300 border border-indigo-400 rounded text-xs text-base-content dark:border-indigo-700/50 dark:text-indigo-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                          >
-                            <%= for {label, val, icon} <- AgentRegistry.agents() do %>
-                              <option value={val} selected={@redo_confirm.redo_agent_type == val}>
-                                {icon} {label}
-                              </option>
-                            <% end %>
-                          </select>
-                        </form>
-                        <%= if @saved_skills != [] do %>
-                          <form
-                            phx-change="update_redo_skill_id"
-                            id="redo-skill-id-form"
-                            class="flex items-center gap-2"
-                          >
-                            <span class="text-xs text-base-content/50 shrink-0 w-20">Skill:</span>
+                        <div class="bg-violet-50 border border-violet-300 dark:bg-violet-900/20 dark:border-violet-700/40 rounded-lg p-3">
+                          <p class="text-xs font-bold text-violet-600 dark:text-violet-400 mb-0.5">
+                            #{redo_step && redo_step["id"]}
+                          </p>
+                          <p class="text-sm font-medium text-base-content/90">
+                            {redo_step && redo_step["title"]}
+                          </p>
+                        </div>
+                        <%!-- Specialist and Skill overrides --%>
+                        <div class="rounded-lg border border-base-300/50 bg-base-100/30 p-3 space-y-2">
+                          <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1">
+                            Override for this redo
+                          </p>
+                          <div class="flex items-center gap-2">
+                            <span class="text-xs text-base-content/50 shrink-0 w-20">
+                              Specialist:
+                            </span>
                             <select
-                              name="skill_id"
-                              class="flex-1 bg-base-300 border border-teal-400 rounded text-xs text-base-content dark:border-teal-700/50 dark:text-teal-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                              name="agent_type"
+                              class="flex-1 bg-base-300 border border-indigo-400 rounded text-xs text-base-content dark:border-indigo-700/50 dark:text-indigo-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                             >
-                              <option value="">— default specialist —</option>
-                              <%= for skill <- @saved_skills do %>
-                                <option
-                                  value={skill.id}
-                                  selected={@redo_confirm.redo_skill_id == skill.id}
-                                >
-                                  {skill.name}
+                              <%= for {label, val, icon} <- AgentRegistry.agents() do %>
+                                <option value={val} selected={@redo_confirm.redo_agent_type == val}>
+                                  {icon} {label}
                                 </option>
                               <% end %>
                             </select>
-                          </form>
-                        <% end %>
-                      </div>
-                      <%= if also_steps != [] do %>
-                        <div class="space-y-2">
-                          <p class="text-xs text-amber-400 flex items-center gap-1.5">
-                            <.icon name="hero-exclamation-triangle" class="w-3.5 h-3.5" />
-                            The following dependent steps will also be re-run:
-                          </p>
-                          <div class="space-y-1.5">
-                            <%= for s <- also_steps do %>
-                              <div class="bg-amber-50 border border-amber-200 dark:bg-amber-900/15 dark:border-amber-700/30 rounded-lg px-3 py-2 flex items-center gap-2">
-                                <.icon
-                                  name="hero-arrow-right"
-                                  class="w-3 h-3 text-amber-600 dark:text-amber-500 shrink-0"
-                                />
-                                <p class="text-xs text-base-content/80">
-                                  <span class="font-bold text-amber-600 dark:text-amber-400">
-                                    #{s["id"]}
-                                  </span>
-                                  — {s["title"]}
-                                </p>
-                              </div>
-                            <% end %>
                           </div>
+                          <%= if @saved_skills != [] do %>
+                            <div class="flex items-center gap-2">
+                              <span class="text-xs text-base-content/50 shrink-0 w-20">Skill:</span>
+                              <select
+                                name="skill_id"
+                                class="flex-1 bg-base-300 border border-teal-400 rounded text-xs text-base-content dark:border-teal-700/50 dark:text-teal-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                              >
+                                <option value="">— default specialist —</option>
+                                <%= for skill <- @saved_skills do %>
+                                  <option
+                                    value={skill.id}
+                                    selected={@redo_confirm.redo_skill_id == skill.id}
+                                  >
+                                    {skill.name}
+                                  </option>
+                                <% end %>
+                              </select>
+                            </div>
+                          <% end %>
                         </div>
-                      <% end %>
-                      <p class="text-xs text-base-content/50">
-                        The final answer will be re-generated once all re-run steps complete.
-                      </p>
-                    </div>
-                    <div class="px-6 py-4 border-t border-base-300/50 flex items-center gap-3 justify-end">
-                      <button
-                        phx-click="cancel_redo_confirm"
-                        class="px-4 py-2 rounded-xl text-sm font-medium bg-base-100/60 hover:bg-base-200/60 text-base-content/80 border border-base-content/20 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        phx-click="confirm_redo_step"
-                        class="px-5 py-2 rounded-xl text-sm font-semibold bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center gap-2"
-                      >
-                        <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Redo
-                      </button>
-                    </div>
+                        <%= if also_steps != [] do %>
+                          <div class="space-y-2">
+                            <p class="text-xs text-amber-400 flex items-center gap-1.5">
+                              <.icon name="hero-exclamation-triangle" class="w-3.5 h-3.5" />
+                              The following dependent steps will also be re-run:
+                            </p>
+                            <div class="space-y-1.5">
+                              <%= for s <- also_steps do %>
+                                <div class="bg-amber-50 border border-amber-200 dark:bg-amber-900/15 dark:border-amber-700/30 rounded-lg px-3 py-2 flex items-center gap-2">
+                                  <.icon
+                                    name="hero-arrow-right"
+                                    class="w-3 h-3 text-amber-600 dark:text-amber-500 shrink-0"
+                                  />
+                                  <p class="text-xs text-base-content/80">
+                                    <span class="font-bold text-amber-600 dark:text-amber-400">
+                                      #{s["id"]}
+                                    </span>
+                                    — {s["title"]}
+                                  </p>
+                                </div>
+                              <% end %>
+                            </div>
+                          </div>
+                        <% end %>
+                        <p class="text-xs text-base-content/50">
+                          The final answer will be re-generated once all re-run steps complete.
+                        </p>
+                      </div>
+                      <div class="px-6 py-4 border-t border-base-300/50 flex items-center gap-3 justify-end">
+                        <button
+                          type="button"
+                          phx-click="cancel_redo_confirm"
+                          class="px-4 py-2 rounded-xl text-sm font-medium bg-base-100/60 hover:bg-base-200/60 text-base-content/80 border border-base-content/20 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          class="px-5 py-2 rounded-xl text-sm font-semibold bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center gap-2"
+                        >
+                          <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Redo
+                        </button>
+                      </div>
+                    </form>
                   </div>
                 </div>
               <% end %>
@@ -3833,84 +3836,81 @@ defmodule HierarchyPaiWeb.PlannerLive do
                         <.icon name="hero-x-mark" class="w-5 h-5" />
                       </button>
                     </div>
-                    <div class="p-6 space-y-4">
-                      <%!-- Failed steps list --%>
-                      <div class="space-y-1.5">
-                        <%= for s <- failed_steps do %>
-                          <div class="bg-orange-50 border border-orange-200 dark:bg-orange-900/15 dark:border-orange-700/30 rounded-lg px-3 py-2">
-                            <p class="text-xs text-base-content/80">
-                              <span class="font-bold text-orange-600 dark:text-orange-400">
-                                #{s["id"]}
-                              </span>
-                              — {s["title"]}
-                            </p>
-                          </div>
-                        <% end %>
-                      </div>
-                      <%!-- Specialist and Skill overrides (applied to all retried steps) --%>
-                      <div class="rounded-lg border border-base-300/50 bg-base-100/30 p-3 space-y-2">
-                        <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1">
-                          Override for all retried steps
-                        </p>
-                        <form
-                          phx-change="update_retry_agent_type"
-                          id="retry-agent-type-form"
-                          class="flex items-center gap-2"
-                        >
-                          <span class="text-xs text-base-content/50 shrink-0 w-20">Specialist:</span>
-                          <select
-                            name="agent_type"
-                            class="flex-1 bg-base-300 border border-indigo-400 rounded text-xs text-base-content dark:border-indigo-700/50 dark:text-indigo-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                          >
-                            <%= for {label, val, icon} <- AgentRegistry.agents() do %>
-                              <option value={val} selected={@retry_confirm.retry_agent_type == val}>
-                                {icon} {label}
-                              </option>
-                            <% end %>
-                          </select>
-                        </form>
-                        <%= if @saved_skills != [] do %>
-                          <form
-                            phx-change="update_retry_skill_id"
-                            id="retry-skill-id-form"
-                            class="flex items-center gap-2"
-                          >
-                            <span class="text-xs text-base-content/50 shrink-0 w-20">Skill:</span>
+                    <form id="retry-confirm-form" phx-submit="confirm_retry_steps">
+                      <div class="p-6 space-y-4">
+                        <%!-- Failed steps list --%>
+                        <div class="space-y-1.5">
+                          <%= for s <- failed_steps do %>
+                            <div class="bg-orange-50 border border-orange-200 dark:bg-orange-900/15 dark:border-orange-700/30 rounded-lg px-3 py-2">
+                              <p class="text-xs text-base-content/80">
+                                <span class="font-bold text-orange-600 dark:text-orange-400">
+                                  #{s["id"]}
+                                </span>
+                                — {s["title"]}
+                              </p>
+                            </div>
+                          <% end %>
+                        </div>
+                        <%!-- Specialist and Skill overrides (applied to all retried steps) --%>
+                        <div class="rounded-lg border border-base-300/50 bg-base-100/30 p-3 space-y-2">
+                          <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1">
+                            Override for all retried steps
+                          </p>
+                          <div class="flex items-center gap-2">
+                            <span class="text-xs text-base-content/50 shrink-0 w-20">
+                              Specialist:
+                            </span>
                             <select
-                              name="skill_id"
-                              class="flex-1 bg-base-300 border border-teal-400 rounded text-xs text-base-content dark:border-teal-700/50 dark:text-teal-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                              name="agent_type"
+                              class="flex-1 bg-base-300 border border-indigo-400 rounded text-xs text-base-content dark:border-indigo-700/50 dark:text-indigo-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                             >
-                              <option value="">— default specialist —</option>
-                              <%= for skill <- @saved_skills do %>
-                                <option
-                                  value={skill.id}
-                                  selected={@retry_confirm.retry_skill_id == skill.id}
-                                >
-                                  {skill.name}
+                              <%= for {label, val, icon} <- AgentRegistry.agents() do %>
+                                <option value={val} selected={@retry_confirm.retry_agent_type == val}>
+                                  {icon} {label}
                                 </option>
                               <% end %>
                             </select>
-                          </form>
-                        <% end %>
+                          </div>
+                          <%= if @saved_skills != [] do %>
+                            <div class="flex items-center gap-2">
+                              <span class="text-xs text-base-content/50 shrink-0 w-20">Skill:</span>
+                              <select
+                                name="skill_id"
+                                class="flex-1 bg-base-300 border border-teal-400 rounded text-xs text-base-content dark:border-teal-700/50 dark:text-teal-300 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                              >
+                                <option value="">— default specialist —</option>
+                                <%= for skill <- @saved_skills do %>
+                                  <option
+                                    value={skill.id}
+                                    selected={@retry_confirm.retry_skill_id == skill.id}
+                                  >
+                                    {skill.name}
+                                  </option>
+                                <% end %>
+                              </select>
+                            </div>
+                          <% end %>
+                        </div>
+                        <p class="text-xs text-base-content/50">
+                          The final answer will be re-generated once all retried steps complete.
+                        </p>
                       </div>
-                      <p class="text-xs text-base-content/50">
-                        The final answer will be re-generated once all retried steps complete.
-                      </p>
-                    </div>
-                    <div class="px-6 py-4 border-t border-base-300/50 flex items-center gap-3 justify-end">
-                      <button
-                        phx-click="cancel_retry_confirm"
-                        class="px-4 py-2 rounded-xl text-sm font-medium bg-base-100/60 hover:bg-base-200/60 text-base-content/80 border border-base-content/20 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        phx-click="confirm_retry_steps"
-                        class="px-5 py-2 rounded-xl text-sm font-semibold bg-orange-600 hover:bg-orange-500 text-white transition-colors flex items-center gap-2"
-                      >
-                        <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Retry
-                      </button>
-                    </div>
+                      <div class="px-6 py-4 border-t border-base-300/50 flex items-center gap-3 justify-end">
+                        <button
+                          type="button"
+                          phx-click="cancel_retry_confirm"
+                          class="px-4 py-2 rounded-xl text-sm font-medium bg-base-100/60 hover:bg-base-200/60 text-base-content/80 border border-base-content/20 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          class="px-5 py-2 rounded-xl text-sm font-semibold bg-orange-600 hover:bg-orange-500 text-white transition-colors flex items-center gap-2"
+                        >
+                          <.icon name="hero-arrow-path" class="w-4 h-4" /> Confirm Retry
+                        </button>
+                      </div>
+                    </form>
                   </div>
                 </div>
               <% end %>
