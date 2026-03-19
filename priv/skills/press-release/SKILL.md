@@ -1,5 +1,5 @@
 ---
-name: Press Release Writer
+name: press-release
 description: Craft compelling press releases in the "working backwards" Amazon style, leading with customer value.
 type: content
 ---

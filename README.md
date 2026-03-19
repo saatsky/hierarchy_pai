@@ -14,7 +14,8 @@ Hierarchical Planner AI decomposes a complex task into parallel, dependency-awar
 - **MCP Client** — attach external MCP servers to individual steps; the Executor calls real tools (APIs, databases, services) during execution; server names are portable and preserved in saved/downloaded plans
 - **Save, download & upload plans** — save plans to the in-memory panel, export as self-contained JSON (includes name, task, assignments, MCP server names, provider info), and re-import on any instance; plans are version-control friendly
 - **Parallel wave execution** — independent steps run concurrently; dependent steps wait only for their specific prerequisites
-- **Real-time Kanban board** — watch steps move through Queue → Running → Done / Failed live, with the agent specialist shown on each card
+- **Real-time Kanban board** — watch steps move through Queue → Running → **Waiting** (user input) → Done / Failed live, with the agent specialist shown on each card
+- **Agent-triggered user input** — during execution, any step's LLM can pause and ask the user a specific question via the `request_user_input` tool; the answer is injected back into the LLM chain and execution continues automatically
 - **Per-step model selection** — assign a different LLM model to each step
 - **Step output preview** — click any completed step card to read the full output before it reaches the aggregator
 - **Redo with override** — re-run any completed step with a different specialist and/or skill to iterate towards a better output

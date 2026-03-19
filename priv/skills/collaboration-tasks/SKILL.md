@@ -1,5 +1,5 @@
 ---
-name: dataminer-collaboration-tasks
+name: collaboration-tasks
 description: >
   Query DataMiner Collaboration tasks via the MCP "Collaboration" server
   (GetMyTasks, GetProjectTasks, GetTaskDetails, GetMySquadTasks) and return

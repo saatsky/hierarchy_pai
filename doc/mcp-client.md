@@ -142,3 +142,50 @@ The Executor caps tool responses at 4 000 characters. If the error still appears
 ### MCP server disconnects after plan reload
 
 MCP server connections are live session state — they are not persisted. After reloading a saved or uploaded plan, reconnect the servers using the **⚡ Connect** button in the MCP Servers panel before running execution.
+
+---
+
+## Agent-Triggered User Input
+
+Every executor step has a built-in `request_user_input` tool available to the LLM alongside any MCP tools. The agent can call this tool at any point during execution when it determines it needs clarification or specific information that is not available in the context.
+
+### How it works
+
+1. The LLM decides it needs user input and calls `request_user_input` with a `question` string
+2. Execution **pauses** — the step card moves from the Running column to the **Waiting** column (amber)
+3. The question is displayed on the step card with a textarea and a **Submit** button
+4. You type your answer and click **Submit**
+5. The answer is returned into the LLM chain as a tool result
+6. The LLM continues reasoning with your answer and produces the step output
+
+### What it looks like
+
+Waiting column card:
+- Amber border and pulsing amber dot in the column header
+- The agent's exact question is shown above the input area
+- A textarea and **Submit** button
+- Multiple steps can be waiting simultaneously — each has its own independent form
+
+### When the agent asks for input
+
+The `request_user_input` tool is described to the LLM as something to use **sparingly** — only when information is truly necessary and cannot be inferred from context. In practice it fires for:
+
+- Personalisation that only the user knows (names, team, project, environment)
+- Binary choices that affect the entire output direction
+- Credentials or configuration the planner couldn't know at plan time
+- Ambiguous instructions where the wrong assumption would waste the full step
+
+### 5-minute timeout
+
+If no answer is submitted within **5 minutes**, the tool returns `"(no answer — user did not respond within 5 minutes)"` and execution continues. The LLM will proceed with that notice in its context and make its best attempt to complete the step anyway.
+
+### Triggering user input from a Skill
+
+Skill files (`SKILL.md`) can instruct the agent to use `request_user_input` for specific situations. For example, a skill for personalised documents can begin with:
+
+```markdown
+Before drafting any content, use the request_user_input tool to ask:
+"What is the recipient's name, role, and the key context I should tailor this document to?"
+```
+
+This makes user input a systematic part of the skill's methodology rather than an ad-hoc decision by the LLM.

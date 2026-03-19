@@ -15,6 +15,8 @@ defmodule HierarchyPai.Agents.Executor do
   alias HierarchyPai.McpServerStore
   alias HierarchyPai.SkillStore
 
+  require Logger
+
   # Cap each prior step's output to keep the request within model token limits.
   @max_context_chars_per_step 1500
 
@@ -26,20 +28,34 @@ defmodule HierarchyPai.Agents.Executor do
     step_id = step["id"]
     agent_type = step["agent_type"] || "executor"
     skill_id = step["skill_id"]
+    skill = skill_id && SkillStore.get(skill_id)
 
     system_prompt =
-      case skill_id && SkillStore.get(skill_id) do
-        %{content: content} when content != "" -> content
-        _ -> AgentRegistry.system_prompt(agent_type)
+      case skill do
+        %{content: content, name: name} when content != "" ->
+          Logger.debug("[Executor] step=#{step_id} using skill=#{skill_id}")
+          build_skill_system_prompt(name, content)
+
+        _ ->
+          Logger.debug(
+            "[Executor] step=#{step_id} no skill applied " <>
+              "(skill_id=#{inspect(skill_id)}, store_result=#{inspect(skill)}), " <>
+              "falling back to agent=#{agent_type}"
+          )
+
+          AgentRegistry.system_prompt(agent_type)
       end
 
     max_retries = Map.get(provider_config, :max_retries, 0)
-    messages = build_messages(step, completed_results, system_prompt)
-    mcp_tools = build_mcp_tools(step)
+    skill_name = is_map(skill) && skill[:name]
+    messages = build_messages(step, completed_results, system_prompt, skill_name)
+    # Always include request_user_input so the agent can ask the user for
+    # clarification mid-execution whenever the skill or task requires it.
+    tools = [build_input_request_tool(step_id, pubsub_topic) | build_mcp_tools(step)]
 
     case run_with_streaming(
            messages,
-           mcp_tools,
+           tools,
            provider_config,
            max_retries,
            step_id,
@@ -50,11 +66,56 @@ defmodule HierarchyPai.Agents.Executor do
 
       {:error, _reason} ->
         # Streaming failed (e.g. provider returned empty body) — retry without streaming
-        case run_without_streaming(messages, mcp_tools, provider_config, max_retries) do
+        case run_without_streaming(messages, tools, provider_config, max_retries) do
           {:ok, updated_chain} -> {:ok, extract_content(updated_chain.last_message.content)}
           {:error, reason} -> {:error, "Executor LLM error: #{reason}"}
         end
     end
+  end
+
+  # Builds a LangChain.Function that the LLM can call at any point during execution
+  # to ask the user for clarification or additional context. The tool call pauses
+  # the executor Task, shows the Waiting column in the UI, and returns the user's
+  # answer back into the chain as a tool result.
+  defp build_input_request_tool(step_id, pubsub_topic) do
+    Function.new!(%{
+      name: "request_user_input",
+      description: """
+      Use this tool when you need additional information or clarification from the user
+      to complete this step. Provide a clear, specific question. Execution will pause
+      until the user responds. Use sparingly — only when the information is truly
+      necessary and cannot be reasonably inferred from the available context.
+      """,
+      parameters_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "question" => %{
+            "type" => "string",
+            "description" => "The specific question to ask the user."
+          }
+        },
+        "required" => ["question"]
+      },
+      function: fn %{"question" => question}, _context ->
+        Phoenix.PubSub.subscribe(HierarchyPai.PubSub, pubsub_topic)
+
+        Phoenix.PubSub.broadcast(
+          HierarchyPai.PubSub,
+          pubsub_topic,
+          {:orchestrator, {:step_awaiting_input, step_id, question}}
+        )
+
+        answer =
+          receive do
+            {:step_input_received, ^step_id, input} -> input
+          after
+            300_000 -> "(no answer — user did not respond within 5 minutes)"
+          end
+
+        Phoenix.PubSub.unsubscribe(HierarchyPai.PubSub, pubsub_topic)
+        answer
+      end
+    })
   end
 
   defp run_with_streaming(
@@ -120,10 +181,10 @@ defmodule HierarchyPai.Agents.Executor do
     e -> {:error, ErrorHelper.friendly_error(Exception.message(e))}
   end
 
-  defp build_messages(step, completed_results, system_prompt) do
+  defp build_messages(step, completed_results, system_prompt, skill_name) do
     [
       Message.new_system!(system_prompt),
-      Message.new_user!(build_user_message(step, completed_results))
+      Message.new_user!(build_user_message(step, completed_results, skill_name))
     ]
   end
 
@@ -137,18 +198,23 @@ defmodule HierarchyPai.Agents.Executor do
 
   defp extract_content(_), do: ""
 
-  defp build_user_message(step, []) do
+  defp build_user_message(step, completed_results, skill_name)
+
+  defp build_user_message(step, [], skill_name) do
+    skill_note = skill_note(skill_name)
+    output_label = if skill_name, do: "Content topic", else: "Expected output"
+
     """
     ## Step to Execute
     **Title:** #{step["title"]}
     **Instruction:** #{step["instruction"]}
-    **Expected output:** #{step["expected_output"]}
-
+    **#{output_label}:** #{step["expected_output"]}
+    #{skill_note}
     No previous steps have been completed yet. Please execute this step.
     """
   end
 
-  defp build_user_message(step, completed_results) do
+  defp build_user_message(step, completed_results, skill_name) do
     context =
       Enum.map_join(completed_results, "\n\n", fn r ->
         output = r["output"] || ""
@@ -163,16 +229,41 @@ defmodule HierarchyPai.Agents.Executor do
         "### Step #{r["step_id"]}: #{r["title"]}\n#{truncated}"
       end)
 
+    skill_note = skill_note(skill_name)
+    output_label = if skill_name, do: "Content topic", else: "Expected output"
+
     """
     ## Step to Execute
     **Title:** #{step["title"]}
     **Instruction:** #{step["instruction"]}
-    **Expected output:** #{step["expected_output"]}
-
+    **#{output_label}:** #{step["expected_output"]}
+    #{skill_note}
     ## Context from Completed Steps
     #{context}
 
     Please execute the step above, referencing prior context where helpful.
+    """
+  end
+
+  defp build_skill_system_prompt(name, content) do
+    """
+    IMPORTANT: You are operating in "#{name}" skill mode.
+    You MUST follow the exact format and structure defined below for ALL output, regardless of any
+    format hints (e.g. "one-paragraph", "summary", "list") that appear in the user message.
+    The user message describes WHAT content to produce; this skill defines HOW to present it.
+
+    #{content}
+    """
+  end
+
+  defp skill_note(nil), do: ""
+
+  defp skill_note(skill_name) do
+    """
+
+    ⚠ Skill active: #{skill_name}. Use the \'Content topic\' field above as the subject matter.
+    Produce output strictly in the format and structure required by the #{skill_name} skill.
+    Ignore any format-related wording (e.g. "one paragraph", "summary") in the instruction — the skill format takes precedence.
     """
   end
 
