@@ -1323,13 +1323,18 @@ defmodule HierarchyPaiWeb.PlannerLive do
         {s["id"], s["agent_type"] || "executor"}
       end)
 
+    step_skills =
+      (plan["steps"] || [])
+      |> Map.new(fn s -> {s["id"], s["skill_id"]} end)
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
+
     {:noreply,
      socket
      |> assign(:plan, plan)
      |> assign(:accepted_steps, all_ids)
      |> assign(:step_configs, %{})
      |> assign(:step_agent_types, agent_types)
-     |> assign(:step_skills, %{})
+     |> assign(:step_skills, step_skills)
      |> assign(:status, :review_plan)
      |> assign(:planner_stream, "")
      |> assign(:elapsed_seconds, 0)}
@@ -1850,6 +1855,18 @@ defmodule HierarchyPaiWeb.PlannerLive do
       MapSet.member?(accepted_steps, step["id"]) and
         Map.get(step_statuses, step["id"]) == target_status
     end)
+  end
+
+  # Returns a short display label for a step card.
+  # When a skill is assigned, shows the skill name (with a 🎨 prefix) instead
+  # of the specialist name, so the user can see at a glance which skill is active.
+  defp step_label(step, step_skills) do
+    skill_id = Map.get(step_skills, step["id"])
+
+    case skill_id && SkillStore.get(skill_id) do
+      %{name: name} -> "🎨 #{name}"
+      _ -> AgentRegistry.label_for(step["agent_type"] || "executor")
+    end
   end
 
   # ── Template ───────────────────────────────────────────────────────────────
@@ -3340,8 +3357,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
                             <p class="text-xs font-medium text-base-content/80 leading-snug">
                               {step["title"]}
                             </p>
-                            <p class="text-xs text-base-content/50 mt-1 truncate">
-                              {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                            <p
+                              class="text-xs text-base-content/50 mt-1 truncate"
+                              title={step_label(step, @step_skills)}
+                            >
+                              {step_label(step, @step_skills)}
                             </p>
                           </div>
                         <% end %>
@@ -3367,8 +3387,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
                             <p class="text-xs font-medium text-base-content/80 leading-snug mb-1.5">
                               {step["title"]}
                             </p>
-                            <p class="text-xs text-violet-400/70 mb-1 truncate">
-                              {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                            <p
+                              class="text-xs text-violet-400/70 mb-1 truncate"
+                              title={step_label(step, @step_skills)}
+                            >
+                              {step_label(step, @step_skills)}
                             </p>
                             <%= if Map.get(@step_streams, step["id"], "") != "" do %>
                               <p class="text-xs text-base-content/60 font-mono leading-relaxed line-clamp-3 break-all">
@@ -3469,11 +3492,17 @@ defmodule HierarchyPaiWeb.PlannerLive do
                             <p class="text-xs font-medium text-base-content/80 leading-snug">
                               {step["title"]}
                             </p>
-                            <p class={[
-                              "text-xs mt-1 truncate",
-                              if(empty_output?, do: "text-amber-500/60", else: "text-emerald-500/70")
-                            ]}>
-                              {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                            <p
+                              class={[
+                                "text-xs mt-1 truncate",
+                                if(empty_output?,
+                                  do: "text-amber-500/60",
+                                  else: "text-emerald-500/70"
+                                )
+                              ]}
+                              title={step_label(step, @step_skills)}
+                            >
+                              {step_label(step, @step_skills)}
                             </p>
                             <%!-- Buttons: icon-only by default, icon+label when card is wide enough --%>
                             <div class="flex items-center gap-1 mt-2">
@@ -3528,8 +3557,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
                             <p class="text-xs font-medium text-base-content/80 leading-snug">
                               {step["title"]}
                             </p>
-                            <p class="text-xs text-red-500/70 dark:text-red-400/60 truncate">
-                              {AgentRegistry.label_for(step["agent_type"] || "executor")}
+                            <p
+                              class="text-xs text-red-500/70 dark:text-red-400/60 truncate"
+                              title={step_label(step, @step_skills)}
+                            >
+                              {step_label(step, @step_skills)}
                             </p>
                             <%= if reason = Map.get(@step_errors, step["id"]) do %>
                               <p class="text-xs text-red-700 dark:text-red-400/80 font-mono leading-snug bg-red-100 dark:bg-red-900/20 rounded px-1.5 py-1 break-all">
