@@ -80,6 +80,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:mcp_servers, McpServerStore.list())
      |> assign(:mcp_server_form, nil)
      |> assign(:step_mcp_servers, %{})
+     |> assign(:step_pending_inputs, %{})
      |> assign(:saved_plans, PlanStore.list())
      |> assign(:save_plan_name, "")
      |> assign(:save_plan_modal, false)}
@@ -445,6 +446,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> assign(:step_outputs, %{})
      |> assign(:selected_step_id, nil)
      |> assign(:step_streams, %{})
+     |> assign(:step_pending_inputs, %{})
      |> assign(:current_step_id, nil)
      |> assign(:final_stream, "")
      |> assign(:final_answer, nil)
@@ -520,6 +522,23 @@ defmodule HierarchyPaiWeb.PlannerLive do
     id = String.to_integer(id_str)
     value = if skill_id == "", do: nil, else: skill_id
     {:noreply, update(socket, :step_skills, &Map.put(&1, id, value))}
+  end
+
+  @impl true
+  def handle_event("submit_step_input", %{"step_id" => step_id_str, "input" => input}, socket) do
+    step_id = String.to_integer(step_id_str)
+    topic = socket.assigns.pubsub_topic
+
+    Phoenix.PubSub.broadcast(
+      HierarchyPai.PubSub,
+      topic,
+      {:step_input_received, step_id, input}
+    )
+
+    {:noreply,
+     socket
+     |> update(:step_statuses, &Map.put(&1, step_id, :running))
+     |> update(:step_pending_inputs, &Map.delete(&1, step_id))}
   end
 
   @impl true
@@ -1340,6 +1359,20 @@ defmodule HierarchyPaiWeb.PlannerLive do
      |> update(:step_outputs, &Map.put(&1, step_id, output))}
   end
 
+  def handle_info({:orchestrator, {:step_awaiting_input, step_id, prompt}}, socket) do
+    {:noreply,
+     socket
+     |> update(:step_statuses, &Map.put(&1, step_id, :awaiting_input))
+     |> update(:step_pending_inputs, &Map.put(&1, step_id, prompt))}
+  end
+
+  # The LiveView receives its own broadcast of {:step_input_received} because it
+  # subscribes to the same topic. We've already updated local state in handle_event,
+  # so this is intentionally a no-op.
+  def handle_info({:step_input_received, _step_id, _input}, socket) do
+    {:noreply, socket}
+  end
+
   def handle_info({:orchestrator, {:step_error, step_id, reason}}, socket) do
     {:noreply,
      socket
@@ -1586,6 +1619,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
     |> assign(:step_agent_types, agent_types)
     |> assign(:step_skills, step_skills)
     |> assign(:step_mcp_servers, step_mcp_servers)
+    |> assign(:step_pending_inputs, %{})
     |> assign(:status, :review_plan)
     |> assign(:planner_stream, "")
     |> assign(:elapsed_seconds, 0)
@@ -3294,7 +3328,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                       </button>
                     <% end %>
                   </div>
-                  <div class="p-5 grid grid-cols-4 gap-4">
+                  <div class="p-5 grid grid-cols-5 gap-4">
                     <div>
                       <h3 class="text-xs font-semibold text-base-content/60 uppercase tracking-wider mb-3 flex items-center gap-1.5">
                         <span class="w-2 h-2 rounded-full bg-base-300 shrink-0"></span> Queue
@@ -3341,6 +3375,60 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                 {String.slice(Map.get(@step_streams, step["id"], ""), 0, 200)}
                               </p>
                             <% end %>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+
+                    <%!-- Waiting column: steps paused awaiting user input --%>
+                    <div>
+                      <h3 class="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0"></span>
+                        Waiting
+                      </h3>
+                      <div class="space-y-2">
+                        <%= for step <- steps_by_status(@plan, @step_statuses, @accepted_steps, :awaiting_input) do %>
+                          <% prompt =
+                            Map.get(
+                              @step_pending_inputs,
+                              step["id"],
+                              "Please provide additional context:"
+                            ) %>
+                          <div class="bg-amber-50 border border-amber-300 dark:bg-amber-900/10 dark:border-amber-700/40 rounded-lg p-3">
+                            <div class="flex items-center gap-1.5 mb-1">
+                              <.icon
+                                name="hero-chat-bubble-left-ellipsis"
+                                class="w-3 h-3 text-amber-500 dark:text-amber-400"
+                              />
+                              <p class="text-xs font-bold text-amber-600 dark:text-amber-400">
+                                #{step["id"]}
+                              </p>
+                            </div>
+                            <p class="text-xs font-medium text-base-content/80 leading-snug mb-1">
+                              {step["title"]}
+                            </p>
+                            <p class="text-xs text-amber-600/70 dark:text-amber-400/60 mb-2">
+                              {prompt}
+                            </p>
+                            <form
+                              phx-submit="submit_step_input"
+                              id={"step-input-form-#{step["id"]}"}
+                              class="space-y-1.5"
+                            >
+                              <input type="hidden" name="step_id" value={step["id"]} />
+                              <textarea
+                                name="input"
+                                rows="3"
+                                placeholder="Type your answer…"
+                                class="w-full bg-base-100 dark:bg-base-300 border border-amber-400 dark:border-amber-700/60 rounded text-xs text-base-content/90 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-500 placeholder-base-content/30 resize-none"
+                              ></textarea>
+                              <button
+                                type="submit"
+                                class="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md bg-amber-500 hover:bg-amber-400 text-white text-xs font-semibold transition-colors"
+                              >
+                                <.icon name="hero-paper-airplane" class="w-3 h-3" /> Submit
+                              </button>
+                            </form>
                           </div>
                         <% end %>
                       </div>
@@ -3937,6 +4025,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
   defp status_label(:review_plan), do: "Review Plan"
   defp status_label(:executing), do: "Executing…"
   defp status_label(:step_failed), do: "Step Failed"
+  defp status_label(:awaiting_input), do: "Awaiting Input"
   defp status_label(:aggregating), do: "Aggregating…"
   defp status_label(:review_answer), do: "Review Answer"
   defp status_label(:done), do: "Done"
@@ -3971,6 +4060,10 @@ defmodule HierarchyPaiWeb.PlannerLive do
   defp status_badge_class(:step_failed),
     do:
       "bg-orange-100 text-orange-700 border border-orange-300 dark:bg-orange-600/20 dark:text-orange-400 dark:border-orange-700/40"
+
+  defp status_badge_class(:awaiting_input),
+    do:
+      "bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-600/20 dark:text-amber-400 dark:border-amber-700/40"
 
   defp status_badge_class(:error),
     do:

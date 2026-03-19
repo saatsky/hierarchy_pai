@@ -35,11 +35,13 @@ defmodule HierarchyPai.Agents.Executor do
 
     max_retries = Map.get(provider_config, :max_retries, 0)
     messages = build_messages(step, completed_results, system_prompt)
-    mcp_tools = build_mcp_tools(step)
+    # Always include request_user_input so the agent can ask the user for
+    # clarification mid-execution whenever the skill or task requires it.
+    tools = [build_input_request_tool(step_id, pubsub_topic) | build_mcp_tools(step)]
 
     case run_with_streaming(
            messages,
-           mcp_tools,
+           tools,
            provider_config,
            max_retries,
            step_id,
@@ -50,11 +52,56 @@ defmodule HierarchyPai.Agents.Executor do
 
       {:error, _reason} ->
         # Streaming failed (e.g. provider returned empty body) — retry without streaming
-        case run_without_streaming(messages, mcp_tools, provider_config, max_retries) do
+        case run_without_streaming(messages, tools, provider_config, max_retries) do
           {:ok, updated_chain} -> {:ok, extract_content(updated_chain.last_message.content)}
           {:error, reason} -> {:error, "Executor LLM error: #{reason}"}
         end
     end
+  end
+
+  # Builds a LangChain.Function that the LLM can call at any point during execution
+  # to ask the user for clarification or additional context. The tool call pauses
+  # the executor Task, shows the Waiting column in the UI, and returns the user's
+  # answer back into the chain as a tool result.
+  defp build_input_request_tool(step_id, pubsub_topic) do
+    Function.new!(%{
+      name: "request_user_input",
+      description: """
+      Use this tool when you need additional information or clarification from the user
+      to complete this step. Provide a clear, specific question. Execution will pause
+      until the user responds. Use sparingly — only when the information is truly
+      necessary and cannot be reasonably inferred from the available context.
+      """,
+      parameters_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "question" => %{
+            "type" => "string",
+            "description" => "The specific question to ask the user."
+          }
+        },
+        "required" => ["question"]
+      },
+      function: fn %{"question" => question}, _context ->
+        Phoenix.PubSub.subscribe(HierarchyPai.PubSub, pubsub_topic)
+
+        Phoenix.PubSub.broadcast(
+          HierarchyPai.PubSub,
+          pubsub_topic,
+          {:orchestrator, {:step_awaiting_input, step_id, question}}
+        )
+
+        answer =
+          receive do
+            {:step_input_received, ^step_id, input} -> input
+          after
+            300_000 -> "(no answer — user did not respond within 5 minutes)"
+          end
+
+        Phoenix.PubSub.unsubscribe(HierarchyPai.PubSub, pubsub_topic)
+        answer
+      end
+    })
   end
 
   defp run_with_streaming(
