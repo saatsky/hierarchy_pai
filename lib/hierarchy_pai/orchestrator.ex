@@ -17,7 +17,7 @@ defmodule HierarchyPai.Orchestrator do
     {:error, reason}
   """
 
-  alias HierarchyPai.Agents.{Planner, Executor, Aggregator}
+  alias HierarchyPai.Agents.{Aggregator, Executor, Planner}
 
   # Phase 1: only planning.
   @spec plan(String.t(), map(), String.t()) :: :ok

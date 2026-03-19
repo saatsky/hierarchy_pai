@@ -334,6 +334,67 @@ avoid overwhelming rate-limited providers. For cloud providers with strict RPM l
 
 ---
 
+## External MCP Servers (UI Feature)
+
+The UI (`http://localhost:4000`) lets you register, connect, and manage **external HTTP MCP servers** that can be called during step execution.
+
+### MCP Servers Panel
+
+Located in the left sidebar. Provides:
+
+| Action | Description |
+|--------|-------------|
+| **Add Server** | Enter a display name + `http(s)://host/mcp` URL and click Save |
+| **Connect** | Runs `POST <url>` with `initialize` + `tools/list` JSON-RPC calls; discovered tools are cached |
+| **Disconnect** | Marks the server as disconnected; cached tools are cleared |
+| **Edit / Delete** | Update URL/name or remove the server entirely |
+
+Server status badges: `connected` (green) / `disconnected` (gray) / `checking` (yellow) / `error` (red).
+
+Once connected, the server's tools are available as LangChain functions injected into any step that selects it.
+
+### Attaching MCP Servers to Steps
+
+In the **Plan Review** screen, each step card has an expandable config section. Expand it to see:
+- Skill selector
+- **MCP Servers** checkboxes — one per connected server
+
+Check the servers whose tools you want available for that step. When the plan is executed, the selected tool functions are injected into the step's LLM chain.
+
+---
+
+## Plan Save / Export / Import (UI Feature)
+
+The **Plan Review** screen provides buttons to persist plans for reuse:
+
+| Button | Description |
+|--------|-------------|
+| **Save** | Opens a modal to name the plan; stores it in the in-memory PlanStore (ETS, up to 50 plans) — **cleared on restart** |
+| **Download JSON** | Downloads the raw plan as `plan.json` — survives restarts |
+| **Upload JSON** (Saved Plans panel → "Load from file") | File picker reads `plan.json`, parses it, and loads it directly into the Plan Review screen |
+
+> **Persistence note**: Saved plans live only in ETS memory. Export to JSON for long-term storage.
+
+### Saved Plans Panel
+
+Located in the left sidebar below the MCP Servers panel. Shows all saved plans with:
+- **Load** — loads the plan into the Plan Review screen, ready to edit and re-execute
+- **Delete** — removes it from the list
+
+---
+
+## Plan Replay (UI Feature)
+
+In the **Run History** panel, each completed run with a plan shows an arrow-path ↺ button. Clicking it:
+
+1. Loads the original plan back into the **Plan Review** screen
+2. Pre-selects all step IDs
+3. Lets you adjust step config (agents, skills, MCP servers) before re-running
+
+This is equivalent to calling `execute_plan` via the MCP server, but driven entirely from the UI.
+
+---
+
 ## Developer / Debug Endpoints
 
 These endpoints are available **only in `dev` environment** (not production/Docker):

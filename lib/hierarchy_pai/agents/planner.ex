@@ -5,13 +5,14 @@ defmodule HierarchyPai.Agents.Planner do
   """
 
   alias HierarchyPai.Agents.ErrorHelper
+  alias HierarchyPai.SkillStore
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
   alias LangChain.MessageProcessors.JsonProcessor
 
   @agent_types HierarchyPai.Agents.AgentRegistry.agent_types()
 
-  @system_prompt """
+  @base_system_prompt """
   You are a Hierarchical Planner Agent.
   Your job is to break down the user's task into 3–8 clear, actionable steps.
   You MUST output ONLY valid JSON — no markdown fences, no extra text.
@@ -27,6 +28,7 @@ defmodule HierarchyPai.Agents.Planner do
         "instruction": "detailed instruction for this step",
         "tool": "llm",
         "agent_type": "executor",
+        "skill_id": null,
         "expected_output": "what this step should produce",
         "depends_on": []
       }
@@ -45,13 +47,34 @@ defmodule HierarchyPai.Agents.Planner do
     "feedback_synthesizer" for analysis/synthesis, "data_analytics" for metrics/reporting,
     "sprint_prioritizer" for planning/backlog work, "growth_hacker" for GTM/acquisition strategy,
     "rapid_prototyper" for quick POCs or MVPs.
+  - Set `skill_id` to the id of the most appropriate skill for the step (from the Available Skills list
+    below), or `null` if no skill fits. The skill_id overrides the agent_type system prompt at runtime,
+    so only assign it when the step clearly matches the skill's domain.
   - Return ONLY valid JSON — absolutely no other text.
   """
 
+  defp build_system_prompt([]) do
+    @base_system_prompt <>
+      "\nAvailable Skills: none — always set skill_id to null.\n"
+  end
+
+  defp build_system_prompt(skills) do
+    skill_lines =
+      Enum.map_join(skills, "\n", fn s ->
+        ~s(  - "#{s.id}": #{s.description})
+      end)
+
+    @base_system_prompt <>
+      "\nAvailable Skills (set skill_id to the matching id, or null if none fits):\n" <>
+      skill_lines <> "\n"
+  end
+
   @spec plan(String.t(), map(), String.t()) :: {:ok, map()} | {:error, String.t()}
   def plan(task, provider_config, pubsub_topic) do
+    system_prompt = build_system_prompt(SkillStore.list())
+
     messages = [
-      Message.new_system!(@system_prompt),
+      Message.new_system!(system_prompt),
       Message.new_user!("Task:\n#{task}\n\nReturn JSON only.")
     ]
 

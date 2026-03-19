@@ -110,21 +110,7 @@ defmodule HierarchyPai.SkillStore do
 
     case File.ls(skills_path) do
       {:ok, entries} ->
-        entries
-        |> Enum.each(fn entry ->
-          skill_file = Path.join([skills_path, entry, "SKILL.md"])
-
-          if File.regular?(skill_file) do
-            case load_skill_file(entry, skill_file) do
-              {:ok, skill} ->
-                :ets.insert(@table, {skill.id, skill})
-                Logger.info("[SkillStore] Loaded skill: #{skill.id} (#{skill.name})")
-
-              {:error, reason} ->
-                Logger.warning("[SkillStore] Skipped #{skill_file}: #{reason}")
-            end
-          end
-        end)
+        Enum.each(entries, &maybe_load_skill(skills_path, &1))
 
       {:error, reason} ->
         Logger.warning("[SkillStore] Could not read skills directory: #{inspect(reason)}")
@@ -149,26 +135,7 @@ defmodule HierarchyPai.SkillStore do
 
         results =
           Enum.reduce(entries, %{added: 0, updated: 0}, fn entry, acc ->
-            skill_file = Path.join([skills_path, entry, "SKILL.md"])
-
-            if File.regular?(skill_file) do
-              case load_skill_file(entry, skill_file) do
-                {:ok, skill} ->
-                  already_existed = MapSet.member?(before_ids, skill.id)
-                  :ets.insert(@table, {skill.id, skill})
-                  Logger.info("[SkillStore] Reloaded skill: #{skill.id} (#{skill.name})")
-
-                  if already_existed,
-                    do: Map.update!(acc, :updated, &(&1 + 1)),
-                    else: Map.update!(acc, :added, &(&1 + 1))
-
-                {:error, reason} ->
-                  Logger.warning("[SkillStore] Skipped #{skill_file} on reload: #{reason}")
-                  acc
-              end
-            else
-              acc
-            end
+            maybe_reload_skill(skills_path, entry, before_ids, acc)
           end)
 
         {:ok, results}
@@ -226,19 +193,7 @@ defmodule HierarchyPai.SkillStore do
       {:ok, remote_dirs} ->
         new_dirs = Enum.reject(remote_dirs, &MapSet.member?(local_ids, &1))
 
-        count =
-          Enum.reduce(new_dirs, 0, fn dir, acc ->
-            case fetch_and_save_remote_skill(dir) do
-              {:ok, skill} ->
-                :ets.insert(@table, {skill.id, skill})
-                Logger.info("[SkillStore] Synced remote skill: #{skill.id}")
-                acc + 1
-
-              {:error, reason} ->
-                Logger.warning("[SkillStore] Failed to sync #{dir}: #{reason}")
-                acc
-            end
-          end)
+        count = new_dirs |> Enum.map(&sync_remote_skill/1) |> Enum.sum()
 
         {:ok, count}
 
@@ -272,6 +227,58 @@ defmodule HierarchyPai.SkillStore do
 
       {:error, reason} ->
         {:error, inspect(reason)}
+    end
+  end
+
+  defp maybe_load_skill(skills_path, entry) do
+    skill_file = Path.join([skills_path, entry, "SKILL.md"])
+
+    if File.regular?(skill_file) do
+      case load_skill_file(entry, skill_file) do
+        {:ok, skill} ->
+          :ets.insert(@table, {skill.id, skill})
+          Logger.info("[SkillStore] Loaded skill: #{skill.id} (#{skill.name})")
+
+        {:error, reason} ->
+          Logger.warning("[SkillStore] Skipped #{skill_file}: #{reason}")
+      end
+    end
+  end
+
+  defp maybe_reload_skill(skills_path, entry, before_ids, acc) do
+    skill_file = Path.join([skills_path, entry, "SKILL.md"])
+
+    if File.regular?(skill_file) do
+      case load_skill_file(entry, skill_file) do
+        {:ok, skill} ->
+          record_reloaded_skill(skill, before_ids, acc)
+
+        {:error, reason} ->
+          Logger.warning("[SkillStore] Skipped #{skill_file} on reload: #{reason}")
+          acc
+      end
+    else
+      acc
+    end
+  end
+
+  defp record_reloaded_skill(skill, before_ids, acc) do
+    :ets.insert(@table, {skill.id, skill})
+    Logger.info("[SkillStore] Reloaded skill: #{skill.id} (#{skill.name})")
+    count_key = if MapSet.member?(before_ids, skill.id), do: :updated, else: :added
+    Map.update!(acc, count_key, &(&1 + 1))
+  end
+
+  defp sync_remote_skill(dir) do
+    case fetch_and_save_remote_skill(dir) do
+      {:ok, skill} ->
+        :ets.insert(@table, {skill.id, skill})
+        Logger.info("[SkillStore] Synced remote skill: #{skill.id}")
+        1
+
+      {:error, reason} ->
+        Logger.warning("[SkillStore] Failed to sync #{dir}: #{reason}")
+        0
     end
   end
 

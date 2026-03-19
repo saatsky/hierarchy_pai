@@ -21,14 +21,12 @@ defmodule HierarchyPai.Pipeline.PipelineRunner do
     providers = ProviderStore.list()
 
     entry =
-      cond do
-        is_nil(provider_ref) ->
-          List.first(providers)
-
-        true ->
-          Enum.find(providers, fn p ->
-            p.id == provider_ref or p.name == provider_ref
-          end)
+      if is_nil(provider_ref) do
+        List.first(providers)
+      else
+        Enum.find(providers, fn p ->
+          p.id == provider_ref or p.name == provider_ref
+        end)
       end
 
     case entry do
