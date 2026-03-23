@@ -140,7 +140,7 @@ defmodule HierarchyPai.LLMProvider do
   def build(%{provider: :custom} = config) do
     ChatOpenAI.new!(%{
       model: config.model,
-      endpoint: config.endpoint,
+      endpoint: normalize_chat_endpoint(config.endpoint),
       api_key: Map.get(config, :api_key, "not-required"),
       stream: Map.get(config, :stream, false)
     })
@@ -250,19 +250,57 @@ defmodule HierarchyPai.LLMProvider do
         {:error, reason} -> {:error, reason}
       end
     else
-      base =
+      models_url =
         cond do
-          endpoint && endpoint != "" -> base_url_from_endpoint(endpoint)
-          provider == :openai -> "https://api.openai.com"
-          provider == :anthropic -> "https://api.anthropic.com"
-          provider == :github_copilot -> "https://api.githubcopilot.com"
-          true -> nil
+          endpoint && endpoint != "" ->
+            models_url_from_endpoint(endpoint)
+
+          provider == :openai ->
+            "https://api.openai.com/v1/models"
+
+          provider == :anthropic ->
+            "https://api.anthropic.com/v1/models"
+
+          provider == :github_copilot ->
+            "https://api.githubcopilot.com/v1/models"
+
+          true ->
+            nil
         end
 
-      case base do
+      case models_url do
         nil -> {:error, "No endpoint configured"}
-        url -> do_fetch_cloud_models("#{url}/v1/models", api_key, provider)
+        url -> do_fetch_cloud_models(url, api_key, provider)
       end
+    end
+  end
+
+  # Ensures `endpoint` is a full chat completions URL for LangChain ChatOpenAI.
+  # Users may enter a bare base URL or a versioned base — we normalize all forms.
+  defp normalize_chat_endpoint(endpoint) do
+    e = String.trim_trailing(endpoint, "/")
+
+    cond do
+      String.ends_with?(e, "/chat/completions") -> e
+      String.ends_with?(e, "/v1") -> e <> "/chat/completions"
+      true -> e <> "/v1/chat/completions"
+    end
+  end
+
+  # Builds the /models URL from whatever the user entered as endpoint.
+  # Preserves non-standard path prefixes (e.g. Docker's /engines/llama.cpp/v1).
+  defp models_url_from_endpoint(endpoint) do
+    e = String.trim_trailing(endpoint, "/")
+
+    cond do
+      String.ends_with?(e, "/chat/completions") ->
+        String.replace_suffix(e, "/chat/completions", "/models")
+
+      String.ends_with?(e, "/v1") ->
+        e <> "/models"
+
+      true ->
+        e <> "/v1/models"
     end
   end
 
