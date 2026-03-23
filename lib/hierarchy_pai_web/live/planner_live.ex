@@ -2389,6 +2389,12 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                       Enum.find(@saved_providers, &(&1.id == saved_id)) ||
                                         Enum.find(@saved_providers, &(&1.id == @planner_provider_id)) ||
                                         hd(@saved_providers) %>
+                                    <%!-- Fall back to provider's saved model when step has no override --%>
+                                    <% effective_model =
+                                      case Map.get(step_cfg, :model, "") do
+                                        "" -> active_sp.model
+                                        m -> m
+                                      end %>
                                     <select
                                       name="provider_id"
                                       class="bg-base-300 border border-violet-700/50 rounded text-xs text-violet-300 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500"
@@ -2408,7 +2414,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                         <%= for m <- sp_models do %>
                                           <option
                                             value={m}
-                                            selected={Map.get(step_cfg, :model, active_sp.model) == m}
+                                            selected={effective_model == m}
                                           >
                                             {m}
                                           </option>
@@ -2418,7 +2424,7 @@ defmodule HierarchyPaiWeb.PlannerLive do
                                       <input
                                         type="text"
                                         name="model"
-                                        value={Map.get(step_cfg, :model, active_sp.model)}
+                                        value={effective_model}
                                         phx-debounce="300"
                                         placeholder="model"
                                         class="flex-1 bg-base-300 border border-base-300 rounded text-xs text-base-content/80 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-500 placeholder-slate-600"
