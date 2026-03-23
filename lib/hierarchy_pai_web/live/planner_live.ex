@@ -1868,6 +1868,11 @@ defmodule HierarchyPaiWeb.PlannerLive do
                     </button>
                   </div>
                 <% end %>
+                <%!-- Planning quality tip --%>
+                <p class="text-[10px] text-base-content/35 leading-relaxed pt-1 border-t border-base-300/20">
+                  <.icon name="hero-light-bulb" class="w-3 h-3 inline mr-0.5 text-amber-400/60" />
+                  Best results with models ≥ 3B params (e.g. llama3.2:3b, qwen2.5:7b). Tiny models may produce single-step plans.
+                </p>
               </div>
 
               <%!-- Agent Specialists panel --%>
